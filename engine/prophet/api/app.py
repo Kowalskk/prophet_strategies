@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from prophet.api.middleware import CORS_KWARGS, BearerTokenMiddleware
-from prophet.api.routes import config, data, markets, performance, positions, strategies, system
+from prophet.api.routes import config, data, markets, performance, positions, signals, strategies, system
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,7 @@ def create_app() -> FastAPI:
     application.include_router(system.router, prefix=_PREFIX)
     application.include_router(markets.router, prefix=_PREFIX)
     application.include_router(strategies.router, prefix=_PREFIX)
+    application.include_router(signals.router, prefix=_PREFIX)
     application.include_router(positions.router, prefix=_PREFIX)
     application.include_router(performance.router, prefix=_PREFIX)
     application.include_router(config.router, prefix=_PREFIX)

@@ -15,6 +15,8 @@ import type {
   Config,
   RiskMetrics,
   SpotPrices,
+  SignalList,
+  SignalSummaryItem,
 } from "./types";
 
 const API_URL = "/api/v1";
@@ -96,4 +98,16 @@ export const api = {
 
   // Data
   prices: () => fetchAPI<SpotPrices>("/data/prices"),
+
+  // Signals
+  signals: (params?: { strategy?: string; status?: string; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.strategy) q.set("strategy", params.strategy);
+    if (params?.status) q.set("status", params.status);
+    if (params?.limit !== undefined) q.set("limit", String(params.limit));
+    if (params?.offset !== undefined) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return fetchAPI<SignalList>(`/signals${qs ? `?${qs}` : ""}`);
+  },
+  signalsSummary: () => fetchAPI<SignalSummaryItem[]>("/signals/summary"),
 };

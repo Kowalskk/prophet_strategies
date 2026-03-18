@@ -163,3 +163,36 @@ export interface SpotPrice {
 export interface SpotPrices {
   prices: SpotPrice[];
 }
+
+export interface SignalMarket {
+  crypto: string;
+  threshold: number | null;
+  direction: string | null;
+  resolution_date: string | null;
+}
+
+export interface Signal {
+  id: number;
+  market_id: number;
+  strategy: string;
+  side: string;
+  target_price: number;
+  size_usd: number;
+  confidence: number;
+  status: string;
+  created_at: string;
+  market: SignalMarket | null;
+}
+
+export interface SignalList {
+  items: Signal[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface SignalSummaryItem {
+  strategy: string;
+  status: string;
+  count: number;
+}

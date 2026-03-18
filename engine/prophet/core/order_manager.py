@@ -168,11 +168,15 @@ class OrderManager:
         return filled_count
 
     async def _try_fill_order(self, order: Any) -> bool:
-        """Attempt to fill one open paper order.
+        """Attempt to fill one open paper order using orderbook snapshots.
+
+        Fill condition: the latest orderbook best_ask for the token is at or
+        below the order's target_price (meaning someone is willing to sell at
+        our price or better).  This avoids requiring authenticated /trades data.
 
         Returns True if filled.
         """
-        from prophet.db.models import ObservedTrade, Position
+        from prophet.db.models import OrderBookSnapshot, Position
 
         # Check expiry
         if order.placed_at:
@@ -189,48 +193,45 @@ class OrderManager:
                 )
                 return False
 
-        # Look for an observed trade at or below (for BUY) our target price
-        # Order is a BUY (we're buying YES or NO tokens)
-        # Fill condition: trade.price <= order.target_price
+        # Get the latest orderbook snapshot for this market/side
         stmt = (
-            select(ObservedTrade)
+            select(OrderBookSnapshot)
             .where(
                 and_(
-                    ObservedTrade.market_id == order.market_id,
-                    ObservedTrade.side == order.side,
-                    ObservedTrade.price <= order.target_price,
-                    ObservedTrade.size_usd >= _MIN_VOLUME_USD,
-                    ObservedTrade.timestamp >= order.placed_at,
+                    OrderBookSnapshot.market_id == order.market_id,
+                    OrderBookSnapshot.side == order.side.lower(),
                 )
             )
-            .order_by(ObservedTrade.timestamp.asc())
+            .order_by(OrderBookSnapshot.timestamp.desc())
             .limit(1)
         )
         result = await self._db.execute(stmt)
-        fill_trade = result.scalar_one_or_none()
+        snapshot = result.scalar_one_or_none()
 
-        if fill_trade is None:
-            return False
-
-        # Apply conservative paper fill model
-        # Slippage: fill slightly above the observed trade price
-        slippage = order.target_price * (_SLIPPAGE_BPS / 10000.0)
-        fill_price = min(order.target_price + slippage, order.target_price)
-        # In paper mode, assume we fill at exactly target_price (we placed the order first)
-        fill_price = order.target_price
-
-        # Queue model: assume queue_multiplier × our size traded before us
-        required_volume = order.size_usd * _QUEUE_MULTIPLIER
-        if fill_trade.size_usd < required_volume:
+        if snapshot is None:
             logger.debug(
-                "PaperOrder %d: trade volume $%.2f < required $%.2f (queue model) — not filled yet",
-                order.id, fill_trade.size_usd, required_volume,
+                "PaperOrder %d: no orderbook snapshot yet for market_id=%d side=%s",
+                order.id, order.market_id, order.side,
             )
             return False
 
-        # Fill the order
+        # Fill condition: best_ask <= target_price means market is willing to
+        # sell at our price or cheaper — order would fill
+        best_ask = snapshot.best_ask
+        if best_ask is None or best_ask <= 0:
+            return False
+
+        if best_ask > order.target_price:
+            logger.debug(
+                "PaperOrder %d: best_ask=%.4f > target=%.4f — not filled",
+                order.id, best_ask, order.target_price,
+            )
+            return False
+
+        # Fill at target price (paper mode)
+        fill_price = order.target_price
         fill_size_usd = order.size_usd
-        fill_at = fill_trade.timestamp
+        fill_at = _utcnow()
 
         order.status = "filled"
         order.fill_price = fill_price
@@ -252,9 +253,9 @@ class OrderManager:
         self._db.add(position)
 
         logger.info(
-            "PaperOrder FILLED: id=%d market_id=%d %s %s@%.4f $%.2f shares=%.2f",
+            "PaperOrder FILLED: id=%d market_id=%d %s %s@%.4f (ask=%.4f) $%.2f",
             order.id, order.market_id, order.strategy,
-            order.side, fill_price, fill_size_usd, shares,
+            order.side, fill_price, best_ask, fill_size_usd,
         )
         return True
 
