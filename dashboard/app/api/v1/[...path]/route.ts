@@ -5,30 +5,30 @@ const API_SECRET = process.env.NEXT_PUBLIC_API_SECRET ?? "";
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  return proxyRequest(request, params.path);
+  return proxyRequest(request, (await params).path);
 }
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  return proxyRequest(request, params.path);
+  return proxyRequest(request, (await params).path);
 }
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  return proxyRequest(request, params.path);
+  return proxyRequest(request, (await params).path);
 }
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  return proxyRequest(request, params.path);
+  return proxyRequest(request, (await params).path);
 }
 
 async function proxyRequest(request: NextRequest, pathSegments: string[]) {
