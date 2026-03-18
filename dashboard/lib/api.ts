@@ -18,14 +18,14 @@ import type {
 } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
-const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? "";
+const API_SECRET = process.env.NEXT_PUBLIC_API_SECRET ?? "";
 
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T | null> {
   try {
     const res = await fetch(`${API_URL}${path}`, {
       ...options,
       headers: {
-        Authorization: `Bearer ${API_TOKEN}`,
+        Authorization: `Bearer ${API_SECRET}`,
         "Content-Type": "application/json",
         ...options?.headers,
       },
