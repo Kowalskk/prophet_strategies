@@ -110,14 +110,27 @@ def _register_builtins() -> None:
     from prophet.strategies import volatility_spread as _vs  # noqa: F401
     from prophet.strategies import stink_bid as _sb  # noqa: F401
     from prophet.strategies import liquidity_sniper as _ls  # noqa: F401
+    from prophet.strategies import volatility_spread_variants as _vsv  # noqa: F401
 
     # Register manually since we can't add the decorator without modifying
     # the already-created classes.  Use the registry function directly.
     from prophet.strategies.volatility_spread import VolatilitySpreadStrategy
     from prophet.strategies.stink_bid import StinkBidStrategy
     from prophet.strategies.liquidity_sniper import LiquiditySniperStrategy
+    from prophet.strategies.volatility_spread_variants import (
+        VolatilitySpreadX3,
+        VolatilitySpreadX4,
+        VolatilitySpreadX5,
+    )
 
-    for cls in (VolatilitySpreadStrategy, StinkBidStrategy, LiquiditySniperStrategy):
+    for cls in (
+        VolatilitySpreadStrategy,
+        StinkBidStrategy,
+        LiquiditySniperStrategy,
+        VolatilitySpreadX3,
+        VolatilitySpreadX4,
+        VolatilitySpreadX5,
+    ):
         if cls.name not in STRATEGY_REGISTRY:
             STRATEGY_REGISTRY[cls.name] = cls
             logger.debug("Auto-registered built-in strategy: %r", cls.name)
