@@ -3,10 +3,12 @@
 :root {
   --background: #020617;
   --foreground: #f8fafc;
-  --card: rgba(30, 41, 59, 0.7);
-  --card-border: rgba(51, 65, 85, 0.5);
-  --accent: #38bdf8;
-  --accent-secondary: #818cf8;
+  --card: rgba(15, 23, 42, 0.6);
+  --card-border: rgba(234, 179, 8, 0.2);
+  --accent: #eab308;
+  --accent-secondary: #facc15;
+  --glass: rgba(15, 23, 42, 0.8);
+  --glass-border: rgba(255, 255, 255, 0.08);
 }
 
 @theme inline {
@@ -14,11 +16,11 @@
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-accent: var(--accent);
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-sans: 'Outfit', 'Inter', system-ui, sans-serif;
 }
 
 body {
-  background: radial-gradient(circle at top left, #0f172a 0%, #020617 100%);
+  background: radial-gradient(circle at top left, #1e1b4b 0%, #020617 100%);
   color: var(--foreground);
   font-family: var(--font-sans);
   min-height: 100vh;
@@ -27,29 +29,45 @@ body {
 
 /* Glassmorphism utility */
 .glass {
-  background: var(--card);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--card-border);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  background: var(--glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
 }
 
 /* Premium card hover */
 .card-hover {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
 .card-hover:hover {
-  transform: translateY(-4px);
+  transform: translateY(-6px) scale(1.01);
   border-color: var(--accent);
-  box-shadow: 0 0 20px rgba(56, 189, 248, 0.2);
+  box-shadow: 0 0 30px rgba(234, 179, 8, 0.15);
 }
 
-/* Animated gradient text */
-.text-gradient {
-  background: linear-gradient(to right, var(--accent), var(--accent-secondary));
+/* Gold Gradient Text */
+.text-gold {
+  background: linear-gradient(135deg, #fde047 0%, #eab308 50%, #854d0e 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  font-weight: 800;
 }
+
+/* Action button premium */
+.btn-gold {
+  background: linear-gradient(135deg, #eab308 0%, #854d0e 100%);
+  color: white;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(234, 179, 8, 0.3);
+}
+
+.btn-gold:hover {
+  transform: brightness(1.1) translateY(-1px);
+  box-shadow: 0 6px 20px rgba(234, 179, 8, 0.4);
+}
+
 

@@ -56,19 +56,19 @@ export default function HomePage() {
         </div>
 
         {/* P&L Chart */}
-        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-white font-semibold">P&L (Last 7 Days)</h2>
+        <div className="glass p-6 card-hover">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-white font-bold text-lg tracking-tight">System Performance (Last 7 Days)</h2>
           </div>
           {chartData.length === 0 ? <Loading /> : <PnLChart data={last7} />}
         </div>
 
         {/* Top positions + kill switch */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 bg-gray-800 rounded-lg p-4 border border-gray-700">
-            <h2 className="text-white font-semibold mb-3">Active Positions (Top 5)</h2>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 glass p-6 card-hover">
+            <h2 className="text-white font-bold text-lg tracking-tight mb-4 text-gold">Active Positions (Top 5)</h2>
             {positions.length === 0 ? (
-              <p className="text-gray-400 text-sm">No active positions.</p>
+              <p className="text-slate-400 text-sm py-8 text-center italic">No active market exposure detected.</p>
             ) : (
               <PositionTable
                 positions={positions.slice(0, 5)}
@@ -76,8 +76,14 @@ export default function HomePage() {
               />
             )}
           </div>
-          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700 flex flex-col items-center justify-center gap-4">
-            <p className="text-gray-400 text-sm text-center">Emergency stop — halts all new order placement</p>
+          <div className="glass p-8 card-hover flex flex-col items-center justify-center gap-6 text-center">
+            <div className="bg-red-500/10 p-4 rounded-full border border-red-500/20">
+              <Activity className="h-8 w-8 text-red-500" />
+            </div>
+            <div>
+              <h3 className="text-white font-bold text-lg mb-2">Emergency Protocol</h3>
+              <p className="text-slate-400 text-sm max-w-[200px]">Immediate halt of all strategy scanning and order placement</p>
+            </div>
             <KillSwitch
               isActive={status?.kill_switch ?? false}
               onToggle={() => mutateStatus()}

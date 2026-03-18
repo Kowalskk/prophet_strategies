@@ -13,19 +13,23 @@ export default function StatusBar() {
   const lastUpdate = new Date().toLocaleTimeString();
 
   return (
-    <footer className="h-10 bg-gray-900 border-t border-gray-700 flex items-center justify-between px-6 text-xs text-gray-400">
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-1.5">
-          <div className={`w-2 h-2 rounded-full ${status ? "bg-green-400" : "bg-red-400"}`} />
-          <span>{status ? "Connected" : "Disconnected"}</span>
+    <footer className="h-12 glass border-t border-white/5 flex items-center justify-between px-8 text-xs text-slate-400 z-50">
+      <div className="flex items-center gap-6">
+        <div className="flex items-center gap-2">
+          <div className={`w-2 h-2 rounded-full shadow-lg ${status ? "bg-green-500 shadow-green-500/30" : "bg-red-500 shadow-red-500/30"}`} />
+          <span className="font-semibold tracking-wide uppercase text-[10px]">{status ? "System Connected" : "System Offline"}</span>
         </div>
-        <span>Last update: {lastUpdate}</span>
-        <span className="text-yellow-400 font-medium">Paper Trading Mode</span>
+        <div className="h-4 w-[1px] bg-white/10" />
+        <span className="font-medium">Update Sync: {lastUpdate}</span>
+        <div className="h-4 w-[1px] bg-white/10" />
+        <span className="text-gold font-bold tracking-widest uppercase text-[10px]">Paper Trading</span>
       </div>
-      <KillSwitch
-        isActive={status?.kill_switch ?? false}
-        onToggle={() => mutate()}
-      />
+      <div className="flex items-center gap-4">
+        <KillSwitch
+          isActive={status?.kill_switch ?? false}
+          onToggle={() => mutate()}
+        />
+      </div>
     </footer>
   );
 }

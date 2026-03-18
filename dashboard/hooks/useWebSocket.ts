@@ -10,9 +10,12 @@ import type { SystemStatus, SpotPrices } from "@/lib/types";
 // Constants
 // ---------------------------------------------------------------------------
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
-const WS_BASE_URL = API_URL.replace(/^http/, "ws").replace("/api/v1", "");
+const API_URL = "/api/v1";
+// We still try to derive WS_BASE_URL, but it will likely fail on HTTPS Vercel
+// unless the backend has WSS.
+const WS_BASE_URL = typeof window !== "undefined" 
+  ? `ws://${window.location.host}` 
+  : "ws://localhost:8000";
 
 const BACKOFF_STEPS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 
