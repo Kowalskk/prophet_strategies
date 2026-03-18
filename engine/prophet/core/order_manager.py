@@ -158,11 +158,11 @@ class OrderManager:
                     "check_fills: error processing order_id=%d: %s", order.id, exc
                 )
 
-        if filled_count:
-            try:
-                await self._db.flush()
-            except Exception as exc:
-                logger.error("check_fills: DB flush failed: %s", exc)
+        try:
+            await self._db.commit()
+        except Exception as exc:
+            logger.error("check_fills: commit failed: %s", exc)
+            await self._db.rollback()
 
         logger.debug("check_fills: %d/%d orders filled", filled_count, len(open_orders))
         return filled_count
@@ -293,11 +293,11 @@ class OrderManager:
                     "check_exits: error for position_id=%d: %s", position.id, exc
                 )
 
-        if closed_count:
-            try:
-                await self._db.flush()
-            except Exception as exc:
-                logger.error("check_exits: DB flush failed: %s", exc)
+        try:
+            await self._db.commit()
+        except Exception as exc:
+            logger.error("check_exits: commit failed: %s", exc)
+            await self._db.rollback()
 
         logger.debug(
             "check_exits: %d/%d positions closed", closed_count, len(open_positions)

@@ -117,6 +117,11 @@ class SignalGenerator:
         logger.info(
             "SignalGenerator: cycle complete — %d new signal(s)", len(new_signals)
         )
+        try:
+            await self._db.commit()
+        except Exception as exc:
+            logger.error("SignalGenerator: commit failed: %s", exc)
+            await self._db.rollback()
         return new_signals
 
     # ------------------------------------------------------------------

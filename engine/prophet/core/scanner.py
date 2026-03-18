@@ -277,6 +277,11 @@ class MarketScanner:
         )
         stats = await self._process_markets(raw_markets)
         await self._update_resolved_markets()
+        try:
+            await self._db.commit()
+        except Exception as exc:
+            logger.error("MarketScanner: full_scan commit failed: %s", exc)
+            await self._db.rollback()
         logger.info(
             "MarketScanner: full scan done — new=%d updated=%d skipped=%d",
             stats["new"], stats["updated"], stats["skipped"],
@@ -328,6 +333,11 @@ class MarketScanner:
 
         stats = await self._process_markets(raw_markets)
         await self._update_resolved_markets()
+        try:
+            await self._db.commit()
+        except Exception as exc:
+            logger.error("MarketScanner: quick_scan commit failed: %s", exc)
+            await self._db.rollback()
         logger.info(
             "MarketScanner: quick scan done — new=%d updated=%d skipped=%d",
             stats["new"], stats["updated"], stats["skipped"],

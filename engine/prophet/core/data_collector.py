@@ -157,6 +157,12 @@ class DataCollector:
                     market.id, exc,
                 )
 
+        if total_trades:
+            try:
+                await self._db.commit()
+            except Exception as exc:
+                logger.error("collect_trades: commit failed: %s", exc)
+                await self._db.rollback()
         logger.info("collect_trades: persisted %d trade(s) across %d markets", total_trades, len(markets))
         return total_trades
 
@@ -189,9 +195,10 @@ class DataCollector:
 
         if updated:
             try:
-                await self._db.flush()
+                await self._db.commit()
             except Exception as exc:
-                logger.error("collect_market_status: DB flush failed: %s", exc)
+                logger.error("collect_market_status: commit failed: %s", exc)
+                await self._db.rollback()
 
         logger.debug("collect_market_status: updated %d market(s)", updated)
         return updated

@@ -68,37 +68,43 @@ async def _lifespan(app: FastAPI):
         clob_client = PolymarketClient()
         await clob_client.start()
 
-        # We need a persistent session for scheduler tasks; use a factory pattern
-        async with get_session() as db:
-            scanner = MarketScanner(gamma_client=gamma_client, db_session=db)
-            ob_service = OrderBookService(clob_client=clob_client, db_session=db)
-            price_service = PriceFeedService(db_session=db)
-            data_collector = DataCollector(
-                clob_client=clob_client,
-                db_session=db,
-                redis_client=None, # Redis client is optional, passing None for now as it's handled internally if needed
-            )
-            risk_mgr = RiskManager(db_session=db)
-            signal_gen = SignalGenerator(
-                clob_client=clob_client,
-                db_session=db,
-                risk_manager=risk_mgr,
-            )
-            order_mgr = OrderManager(
-                clob_client=clob_client,
-                db_session=db,
-            )
+        # Create a persistent session for scheduler tasks.
+        # We intentionally do NOT use the get_session() context manager here —
+        # that would close the session immediately after start().
+        # Each component calls commit() at the end of its own job methods.
+        from prophet.db.database import get_session_factory
+        _db_session = get_session_factory()()
 
-            _scheduler = Scheduler(
-                scanner=scanner,
-                data_collector=data_collector,
-                signal_generator=signal_gen,
-                order_manager=order_mgr,
-            )
-            await _scheduler.start()
+        scanner = MarketScanner(gamma_client=gamma_client, db_session=_db_session)
+        ob_service = OrderBookService(clob_client=clob_client, db_session=_db_session)
+        price_service = PriceFeedService(db_session=_db_session)
+        data_collector = DataCollector(
+            clob_client=clob_client,
+            db_session=_db_session,
+            redis_client=None,
+        )
+        risk_mgr = RiskManager(db_session=_db_session)
+        signal_gen = SignalGenerator(
+            clob_client=clob_client,
+            db_session=_db_session,
+            risk_manager=risk_mgr,
+        )
+        order_mgr = OrderManager(
+            clob_client=clob_client,
+            db_session=_db_session,
+        )
+
+        _scheduler = Scheduler(
+            scanner=scanner,
+            data_collector=data_collector,
+            signal_generator=signal_gen,
+            order_manager=order_mgr,
+        )
+        await _scheduler.start()
 
         # Store scheduler on app state so shutdown can stop it
         app.state.scheduler = _scheduler
+        app.state.db_session = _db_session
         app.state.gamma_client = gamma_client
         app.state.clob_client = clob_client
         logger.info("Scheduler started.")
@@ -122,6 +128,14 @@ async def _lifespan(app: FastAPI):
             logger.info("Scheduler stopped.")
         except Exception as exc:
             logger.warning("Error stopping scheduler: %s", exc)
+
+    # Close persistent DB session
+    db_session = getattr(app.state, "db_session", None)
+    if db_session is not None:
+        try:
+            await db_session.close()
+        except Exception:
+            pass
 
     # Close HTTP clients
     for attr in ("gamma_client", "clob_client"):
