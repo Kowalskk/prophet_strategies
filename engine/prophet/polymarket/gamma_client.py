@@ -90,9 +90,12 @@ async def _gamma_request(
                 )
                 raise
 
-    raise RuntimeError(
+    exc = RuntimeError(
         f"Gamma API request to {endpoint} failed after {_MAX_RETRIES} attempts"
-    ) from last_exc
+    )
+    if isinstance(last_exc, BaseException):
+        raise exc from last_exc
+    raise exc
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +335,33 @@ class GammaClient:
         raw_list: list[dict[str, Any]] = data if isinstance(data, list) else data.get("data", [])
         logger.debug("get_events(tag=%r): %d results", tag, len(raw_list))
         return raw_list
+
+    async def get_markets_from_event_slug(
+        self, slug: str
+    ) -> list[PolymarketMarket]:
+        """Fetch all individual markets that belong to an event slug.
+
+        Example slug: ``"bitcoin-above-on-march-19"``
+
+        The Gamma /events endpoint returns events with a nested ``markets``
+        list.  Each market inside the event has full token IDs and question
+        text.
+        """
+        http = self._ensure_started()
+        data = await _gamma_request(http, "/events", params={"slug": slug})
+        raw_list: list[dict[str, Any]] = data if isinstance(data, list) else data.get("data", [])
+        if not raw_list:
+            logger.debug("No event found for slug: %s", slug)
+            return []
+
+        markets: list[PolymarketMarket] = []
+        for event in raw_list:
+            for raw_market in event.get("markets", []):
+                if isinstance(raw_market, dict):
+                    markets.append(_parse_gamma_market(raw_market))
+
+        logger.debug("get_markets_from_event_slug(%r): %d markets", slug, len(markets))
+        return markets
 
     # ------------------------------------------------------------------
     # Convenience

@@ -297,25 +297,34 @@ class MarketScanner:
         logger.info("MarketScanner: starting QUICK scan")
         raw_markets: list[PolymarketMarket] = []
 
-        for crypto in settings.target_cryptos:
-            try:
-                results = await self._gamma.search_markets(
-                    query=f"{crypto} above OR below",
-                    active=True,
-                    archived=False,
-                    limit=100,
-                )
-                raw_markets.extend(results)
-                # Also search without directional filter to catch edge cases
-                results2 = await self._gamma.search_markets(
-                    query=crypto,
-                    active=True,
-                    archived=False,
-                    limit=100,
-                )
-                raw_markets.extend(results2)
-            except Exception as exc:
-                logger.error("Quick scan error for %s: %s", crypto, exc)
+        # Primary method: fetch daily markets via event slugs for the next 7 days.
+        # Slugs follow the pattern "{crypto}-above-on-{month}-{day}".
+        # This is more reliable than keyword search which returns stale 2020 markets.
+        from datetime import timedelta
+        _CRYPTO_SLUG_PREFIX: dict[str, str] = {
+            "BTC": "bitcoin",
+            "ETH": "ethereum",
+            "SOL": "solana",
+        }
+        _MONTH_SLUG: dict[int, str] = {
+            1: "january", 2: "february", 3: "march", 4: "april",
+            5: "may", 6: "june", 7: "july", 8: "august",
+            9: "september", 10: "october", 11: "november", 12: "december",
+        }
+        today = date.today()
+        for delta in range(0, 8):
+            target_date = today + timedelta(days=delta)
+            month_name = _MONTH_SLUG[target_date.month]
+            for crypto in settings.target_cryptos:
+                prefix = _CRYPTO_SLUG_PREFIX.get(crypto, crypto.lower())
+                slug = f"{prefix}-above-on-{month_name}-{target_date.day}"
+                try:
+                    results: list[PolymarketMarket] = await self._gamma.get_markets_from_event_slug(slug)
+                    if results:
+                        logger.debug("Event slug %s: %d markets", slug, len(results))
+                    raw_markets.extend(results)
+                except Exception as exc:
+                    logger.debug("Slug scan skip %s: %s", slug, exc)
 
         stats = await self._process_markets(raw_markets)
         await self._update_resolved_markets()
