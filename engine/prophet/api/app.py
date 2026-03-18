@@ -55,6 +55,7 @@ async def _lifespan(app: FastAPI):
         from prophet.core.data_collector import DataCollector
         from prophet.core.signal_generator import SignalGenerator
         from prophet.core.order_manager import OrderManager
+        from prophet.core.risk_manager import RiskManager
         from prophet.polymarket.gamma_client import GammaClient
         from prophet.polymarket.clob_client import PolymarketClient
         from prophet.polymarket.orderbook import OrderBookService
@@ -74,13 +75,19 @@ async def _lifespan(app: FastAPI):
             price_service = PriceFeedService(db_session=db)
             data_collector = DataCollector(
                 clob_client=clob_client,
-                gamma_client=gamma_client,
-                orderbook_service=ob_service,
-                price_service=price_service,
+                db_session=db,
+                redis_client=None, # Redis client is optional, passing None for now as it's handled internally if needed
+            )
+            risk_mgr = RiskManager(db_session=db)
+            signal_gen = SignalGenerator(
+                clob_client=clob_client,
+                db_session=db,
+                risk_manager=risk_mgr,
+            )
+            order_mgr = OrderManager(
+                clob_client=clob_client,
                 db_session=db,
             )
-            signal_gen = SignalGenerator(db_session=db)
-            order_mgr = OrderManager(db_session=db)
 
             _scheduler = Scheduler(
                 scanner=scanner,
