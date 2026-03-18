@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \":*)",
+      "Bash(PYTHONIOENCODING=utf-8 python -c \":*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(ls -lh \"C:\\\\Users\\\\torra\\\\OneDrive\\\\Documentos\\\\Polymarket Strategies\"/*.py)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(python -m venv .venv)",
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(.venv/Scripts/python -c \"from prophet.config import settings; print\\(''Config OK''\\); print\\(f''  paper_trading={settings.paper_trading}''\\); print\\(f''  target_cryptos={settings.target_cryptos}''\\); print\\(f''  max_open_positions={settings.max_open_positions}''\\)\")",
+      "Bash(.venv/Scripts/python -c \":*)",
+      "Bash(ls \"C:\\\\Users\\\\torra\\\\OneDrive\\\\Documentos\\\\Polymarket Strategies\\\\engine\\\\prophet\\\\polymarket\"\" 2>/dev/null || echo \"Directory not found or empty \")",
+      "Bash(npx create-next-app@latest dashboard --typescript --tailwind --app --eslint --no-git --no-src-dir --no-react-compiler)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(.venv/Scripts/python.exe -c \"from prophet.main import main; print\\(''Main OK''\\)\")",
+      "Bash(ls \"C:\\\\Users\\\\torra\\\\OneDrive\\\\Documentos\\\\Polymarket Strategies\\\\engine\\\\prophet\\\\api\\\\routes\"\" 2>&1 && ls \"C:UserstorraOneDriveDocumentosPolymarket Strategiesengineprophetcore\"\")"
+    ]
+  }
+}

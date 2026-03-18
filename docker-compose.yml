@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: prophet_user
+      POSTGRES_PASSWORD: prophet_password
+      POSTGRES_DB: prophet_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  engine:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    environment:
+      # Credenciales de BD (debe coincidir con la config de arriba)
+      - DATABASE_URL=postgresql+asyncpg://prophet_user:prophet_password@postgres:5432/prophet_db
+      - REDIS_URL=redis://redis:6379/0
+      - API_SECRET=cambiame_por_un_secreto_seguro
+      - POLYMARKET_HOST=https://clob.polymarket.com
+      - POLYMARKET_CHAIN_ID=137
+      - POLYMARKET_PROXY_ADDRESS=0x4b70d04124c2996De29e0caa050A49822Faec6Cc
+      # Activar API (ej: KEY, SECRET, PASSPHRASE de Polymarket)
+      # - POLYMARKET_API_KEY=
+      # - POLYMARKET_API_SECRET=
+      # - POLYMARKET_API_PASSPHRASE=
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

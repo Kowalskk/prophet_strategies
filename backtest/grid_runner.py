@@ -219,14 +219,26 @@ class GridRunner:
 # Helpers
 # ------------------------------------------------------------------
 
+def _format_val(v):
+    try:
+        f = float(v)
+        if f.is_integer():
+            return int(f)
+        return round(f, 6)
+    except (ValueError, TypeError):
+        return str(v)
+
 def _job_key(job: dict) -> str:
     p = job["params"]
-    return f"{job['strategy']}|{job['crypto']}|{job['fill_model']}|{sorted(p.items())}"
+    # Cast values to standardized strings/numbers to avoid type issues
+    std_p = sorted([(str(k), _format_val(v)) for k, v in p.items()])
+    return f"{job['strategy']}|{job['crypto']}|{job['fill_model']}|{std_p}"
 
 
 def _row_key(row: dict) -> str:
     params = {k.replace("param_", ""): v for k, v in row.items() if k.startswith("param_")}
-    return f"{row.get('strategy')}|{row.get('crypto')}|{row.get('fill_model')}|{sorted(params.items())}"
+    std_p = sorted([(str(k), _format_val(v)) for k, v in params.items()])
+    return f"{row.get('strategy')}|{row.get('crypto')}|{row.get('fill_model')}|{std_p}"
 
 
 def _take(gen: Iterator, n: int) -> Iterator:

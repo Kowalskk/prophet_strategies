@@ -1,0 +1,92 @@
+# =============================================================================
+# Prophet Engine — .gitignore
+# =============================================================================
+
+# Environment secrets — NEVER commit these
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Python packaging artifacts
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+wheels/
+*.whl
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+nosetests.xml
+junit.xml
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ruff
+.ruff_cache/
+
+# Local SQLite databases (dev/test)
+*.db
+*.sqlite
+*.sqlite3
+
+# Data directories (large files, not for version control)
+data/
+backtest_data/
+*.csv
+*.parquet
+*.feather
+
+# Alembic autogenerate temp files
+# (keep versions/ tracked, but not temp files)
+alembic/versions/__pycache__/
+
+# Logs
+*.log
+logs/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db

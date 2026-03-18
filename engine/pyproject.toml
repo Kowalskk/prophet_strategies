@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "prophet-engine"
+version = "0.1.0"
+description = "Prophet Strategies — automated paper trading engine for Polymarket crypto markets"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+
+dependencies = [
+    "fastapi==0.115.*",
+    "uvicorn[standard]==0.34.*",
+    "sqlalchemy[asyncio]==2.0.*",
+    "asyncpg==0.30.*",
+    "alembic==1.14.*",
+    "redis==5.2.*",
+    "pydantic-settings==2.7.*",
+    "py-clob-client==0.18.*",
+    "httpx==0.28.*",
+    "apscheduler==3.11.*",
+    "python-dotenv==1.1.*",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.*",
+    "pytest-asyncio==0.25.*",
+    "pytest-cov==6.*",
+    "ruff==0.9.*",
+    "mypy==1.14.*",
+]
+
+[project.scripts]
+prophet = "prophet.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["prophet*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "N", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
