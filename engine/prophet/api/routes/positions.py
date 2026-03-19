@@ -57,25 +57,34 @@ def _position_to_response(pos: object, current_price: float | None = None) -> Po
     )
 
 
-async def _get_current_price(market_id: int, side: str) -> float | None:
-    """Try to fetch the current best-bid from Redis for unrealized P&L."""
+async def _get_current_price(db: AsyncSession, market_id: int, side: str) -> float | None:
+    """Fetch the latest best_bid from the most recent orderbook snapshot."""
     try:
-        import json
+        from prophet.db.models import Market, OrderBookSnapshot
 
-        import redis.asyncio as aioredis
+        # Determine the correct token_id for this side
+        market = await db.get(Market, market_id)
+        if market is None:
+            return None
+        token_id = market.token_id_yes if side.upper() == "YES" else market.token_id_no
 
-        from prophet.config import settings
+        from sqlalchemy import select as sa_select
 
-        redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
-        cache_key = f"ob:{market_id}:{side.lower()}"
-        cached = await redis_client.get(cache_key)
-        await redis_client.aclose()
-        if cached:
-            data = json.loads(cached)
-            return data.get("best_bid")
+        stmt = (
+            sa_select(OrderBookSnapshot.best_bid)
+            .where(
+                OrderBookSnapshot.market_id == market_id,
+                OrderBookSnapshot.token_id == token_id,
+            )
+            .order_by(OrderBookSnapshot.timestamp.desc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        row = result.scalar_one_or_none()
+        return float(row) if row is not None else None
     except Exception:
-        pass
-    return None
+        logger.debug("_get_current_price failed for market_id=%s side=%s", market_id, side, exc_info=True)
+        return None
 
 
 @router.get("", response_model=PositionListResponse)
@@ -95,7 +104,7 @@ async def list_open_positions(
 
     items = []
     for pos in positions:
-        current_price = await _get_current_price(pos.market_id, pos.side)
+        current_price = await _get_current_price(db, pos.market_id, pos.side)
         items.append(_position_to_response(pos, current_price))
 
     return PositionListResponse(items=items, total=len(items))
@@ -154,7 +163,7 @@ async def close_position(
     now = datetime.now(timezone.utc)
 
     # Try to get current price for exit
-    current_price = await _get_current_price(pos.market_id, pos.side)
+    current_price = await _get_current_price(db, pos.market_id, pos.side)
     exit_price = current_price or pos.entry_price  # fallback to entry if unavailable
 
     gross_pnl = (exit_price - pos.entry_price) * pos.shares
