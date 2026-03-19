@@ -92,7 +92,7 @@ async def list_open_positions(
     db: AsyncSession = Depends(get_db),
 ) -> PositionListResponse:
     """Return all open positions with live unrealized P&L estimates."""
-    from prophet.db.models import Position
+    from prophet.db.models import Market, OrderBookSnapshot, Position
 
     stmt = (
         select(Position)
@@ -100,11 +100,63 @@ async def list_open_positions(
         .order_by(Position.opened_at.desc())
     )
     result = await db.execute(stmt)
-    positions = result.scalars().all()
+    positions = list(result.scalars().all())
+
+    if not positions:
+        return PositionListResponse(items=[], total=0)
+
+    # Fetch all latest OB snapshots in one query (one row per market+side combo)
+    # using a lateral/subquery approach: get distinct market_ids, then one query.
+    market_ids = list({p.market_id for p in positions})
+
+    # Get all markets to resolve token_ids
+    markets_stmt = select(Market).where(Market.id.in_(market_ids))
+    markets_result = await db.execute(markets_stmt)
+    markets_map = {m.id: m for m in markets_result.scalars().all()}
+
+    # Build token_id → market_id+side lookup
+    token_to_key: dict[str, tuple[int, str]] = {}
+    for m in markets_map.values():
+        if m.token_id_yes:
+            token_to_key[m.token_id_yes] = (m.id, "YES")
+        if m.token_id_no:
+            token_to_key[m.token_id_no] = (m.id, "NO")
+
+    token_ids = list(token_to_key.keys())
+
+    # Single query: latest snapshot per token_id using ROW_NUMBER
+    from sqlalchemy import func, over
+    from sqlalchemy.orm import aliased
+
+    if token_ids:
+        # Subquery with row_number to get latest per token
+        rn = func.row_number().over(
+            partition_by=OrderBookSnapshot.token_id,
+            order_by=OrderBookSnapshot.timestamp.desc(),
+        ).label("rn")
+        sub = (
+            select(OrderBookSnapshot, rn)
+            .where(OrderBookSnapshot.token_id.in_(token_ids))
+            .subquery()
+        )
+        latest_stmt = select(sub).where(sub.c.rn == 1)
+        latest_result = await db.execute(latest_stmt)
+        rows = latest_result.fetchall()
+
+        # Build (market_id, side) → best_bid lookup
+        price_map: dict[tuple[int, str], float] = {}
+        for row in rows:
+            token_id = row.token_id
+            best_bid = row.best_bid
+            if token_id in token_to_key and best_bid is not None:
+                key = token_to_key[token_id]
+                price_map[key] = float(best_bid)
+    else:
+        price_map = {}
 
     items = []
     for pos in positions:
-        current_price = await _get_current_price(db, pos.market_id, pos.side)
+        current_price = price_map.get((pos.market_id, pos.side.upper()))
         items.append(_position_to_response(pos, current_price))
 
     return PositionListResponse(items=items, total=len(items))
