@@ -95,9 +95,15 @@ export default function SignalsPage() {
                     const rows = summary.filter(x => x.strategy === strat);
                     const statuses = Array.from(new Set(summary.map(x => x.status))).sort();
                     const stratTotal = rows.reduce((s, x) => s + x.count, 0);
+                    const isActive = strategyFilter === strat;
                     return (
-                      <tr key={strat} className="border-b border-white/5 hover:bg-white/3">
-                        <td className="py-3 pr-6 text-yellow-400 font-mono text-xs">{strat}</td>
+                      <tr key={strat} className={`border-b border-white/5 cursor-pointer transition-colors ${isActive ? "bg-yellow-400/5" : "hover:bg-white/3"}`}
+                        onClick={() => { setStrategyFilter(isActive ? "" : strat); setOffset(0); }}>
+                        <td className="py-3 pr-6">
+                          <span className={`font-mono text-xs px-2 py-0.5 rounded border transition-colors ${isActive ? "text-black bg-yellow-400 border-yellow-400" : "text-yellow-400 border-yellow-400/30 hover:border-yellow-400/60"}`}>
+                            {strat}
+                          </span>
+                        </td>
                         {statuses.map(s => {
                           const row = rows.find(r => r.status === s);
                           return (
@@ -170,8 +176,13 @@ export default function SignalsPage() {
                         <td className="py-2.5 pr-4 text-slate-400 text-xs whitespace-nowrap">
                           {new Date(sig.created_at).toLocaleString()}
                         </td>
-                        <td className="py-2.5 pr-4 text-yellow-400 font-mono text-xs whitespace-nowrap">
-                          {sig.strategy}
+                        <td className="py-2.5 pr-4 whitespace-nowrap">
+                          <button
+                            onClick={() => { setStrategyFilter(strategyFilter === sig.strategy ? "" : sig.strategy); setOffset(0); }}
+                            className={`font-mono text-xs px-2 py-0.5 rounded border transition-colors ${strategyFilter === sig.strategy ? "text-black bg-yellow-400 border-yellow-400" : "text-yellow-400 border-yellow-400/30 hover:bg-yellow-400/10 hover:border-yellow-400/60"}`}
+                          >
+                            {sig.strategy}
+                          </button>
                         </td>
                         <td className="py-2.5 pr-4 max-w-[200px]">
                           <div className="text-slate-300 text-xs truncate">
