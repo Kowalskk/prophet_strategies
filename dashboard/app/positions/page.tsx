@@ -3,7 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
-import type { PositionList, ClosedPositionList } from "@/lib/types";
+import type { PositionList, ClosedPositionList, MarketList, Market } from "@/lib/types";
 import { usePrices } from "@/hooks/usePrices";
 import Header from "@/components/layout/Header";
 import PositionTable from "@/components/positions/PositionTable";
@@ -21,6 +21,9 @@ export default function PositionsPage() {
   const { data: closedList, isLoading: loadingClosed } =
     useSWR<ClosedPositionList>("/positions/closed", fetcher, { refreshInterval: REFRESH });
   const { data: prices } = usePrices(30000);
+  const { data: marketList } = useSWR<MarketList>("/markets", fetcher, { refreshInterval: 60000 });
+  const marketsMap: Record<number, Market> = {};
+  for (const m of marketList?.items ?? []) marketsMap[m.id] = m;
 
   const active = activeList?.items ?? [];
   const closed = closedList?.items ?? [];
@@ -61,10 +64,10 @@ export default function PositionsPage() {
 
         <div className="bg-gray-800 rounded-lg border border-gray-700">
           {tab === "active" && (
-            loadingActive ? <Loading /> : <PositionTable positions={active} prices={prices ?? undefined} onClose={() => mutateActive()} />
+            loadingActive ? <Loading /> : <PositionTable positions={active} markets={marketsMap} prices={prices ?? undefined} onClose={() => mutateActive()} />
           )}
           {tab === "closed" && (
-            loadingClosed ? <Loading /> : <PositionTable positions={closed} prices={prices ?? undefined} />
+            loadingClosed ? <Loading /> : <PositionTable positions={closed} markets={marketsMap} prices={prices ?? undefined} />
           )}
         </div>
       </div>
