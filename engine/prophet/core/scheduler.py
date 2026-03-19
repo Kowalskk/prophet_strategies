@@ -194,6 +194,16 @@ class Scheduler:
         )
 
         # ── Order Manager ─────────────────────────────────────────────
+        # Convert pending signals → paper orders: every 5 minutes
+        s.add_job(
+            self._safe_run("order_manager.place_pending_orders", self._order_manager.place_pending_orders),
+            trigger=IntervalTrigger(minutes=5),
+            id="place_pending_orders",
+            name="OrderManager — place pending orders",
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
         # Fill checks: every 2 minutes
         s.add_job(
             self._safe_run("order_manager.check_fills", self._order_manager.check_fills),

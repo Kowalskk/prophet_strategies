@@ -124,6 +124,52 @@ class OrderManager:
         return order
 
     # ------------------------------------------------------------------
+    # Pending signal → PaperOrder conversion
+    # ------------------------------------------------------------------
+
+    async def place_pending_orders(self) -> int:
+        """Convert all pending signals into open paper orders.
+
+        Called every 5 minutes by the scheduler.  Picks up any Signal with
+        ``status='pending'``, creates a :class:`PaperOrder` for each, and
+        marks the signal as ``'executed'``.
+
+        Returns
+        -------
+        int
+            Number of orders placed.
+        """
+        from prophet.db.models import Signal
+
+        stmt = select(Signal).where(Signal.status == "pending")
+        result = await self._db.execute(stmt)
+        pending = list(result.scalars().all())
+
+        if not pending:
+            return 0
+
+        placed = 0
+        for signal in pending:
+            try:
+                await self.create_paper_order(signal)
+                placed += 1
+            except Exception as exc:
+                logger.error(
+                    "place_pending_orders: failed for signal_id=%d: %s",
+                    signal.id, exc,
+                )
+
+        try:
+            await self._db.commit()
+        except Exception as exc:
+            logger.error("place_pending_orders: commit failed: %s", exc)
+            await self._db.rollback()
+
+        if placed:
+            logger.info("place_pending_orders: placed %d order(s)", placed)
+        return placed
+
+    # ------------------------------------------------------------------
     # Fill checking
     # ------------------------------------------------------------------
 

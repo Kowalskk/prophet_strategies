@@ -58,8 +58,6 @@ async def _lifespan(app: FastAPI):
         from prophet.core.risk_manager import RiskManager
         from prophet.polymarket.gamma_client import GammaClient
         from prophet.polymarket.clob_client import PolymarketClient
-        from prophet.polymarket.orderbook import OrderBookService
-        from prophet.polymarket.price_feeds import PriceFeedService
 
         # Build shared HTTP clients
         gamma_client = GammaClient()
@@ -73,17 +71,14 @@ async def _lifespan(app: FastAPI):
         from prophet.db.database import get_session_factory
         _sf = get_session_factory()
 
-        _db_scanner   = _sf()
-        _db_collector = _sf()
-        _db_signal    = _sf()
-        _db_order     = _sf()
+        _db_scanner = _sf()
+        _db_signal  = _sf()
+        _db_order   = _sf()
 
         scanner = MarketScanner(gamma_client=gamma_client, db_session=_db_scanner)
-        ob_service = OrderBookService(clob_client=clob_client, db_session=_db_collector)
-        price_service = PriceFeedService(db_session=_db_collector)
+        # DataCollector now creates its own session per job call — no shared session
         data_collector = DataCollector(
             clob_client=clob_client,
-            db_session=_db_collector,
             redis_client=None,
         )
         risk_mgr = RiskManager(db_session=_db_signal)
