@@ -116,7 +116,9 @@ export default function PositionTable({ positions, markets, prices, onClose }: P
                 <td className="py-3 px-3 max-w-[210px]">
                   {label ? (
                     <a
-                      href="/markets"
+                      href={market?.condition_id ? `https://polymarket.com/event/${market.condition_id}` : "#"}
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className="hover:text-yellow-400 text-gray-200 transition-colors block text-xs font-medium truncate"
                       title={market?.question ?? label}
                     >

@@ -21,7 +21,7 @@ export default function PositionsPage() {
   const { data: closedList, isLoading: loadingClosed } =
     useSWR<ClosedPositionList>("/positions/closed", fetcher, { refreshInterval: REFRESH });
   const { data: prices } = usePrices(30000);
-  const { data: marketList } = useSWR<MarketList>("/markets", fetcher, { refreshInterval: 60000 });
+  const { data: marketList } = useSWR<MarketList>("/markets?limit=500", fetcher, { refreshInterval: 60000 });
   const marketsMap: Record<number, Market> = {};
   for (const m of marketList?.items ?? []) marketsMap[m.id] = m;
 
