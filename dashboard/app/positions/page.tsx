@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 import type { PositionList, ClosedPositionList, MarketList, Market } from "@/lib/types";
@@ -15,6 +15,7 @@ const REFRESH = 15000;
 
 export default function PositionsPage() {
   const [tab, setTab] = useState<"active" | "closed">("active");
+  const [lastUpdate, setLastUpdate] = useState<string>("");
 
   const { data: activeList, isLoading: loadingActive, mutate: mutateActive } =
     useSWR<PositionList>("/positions", fetcher, { refreshInterval: REFRESH });
@@ -33,6 +34,15 @@ export default function PositionsPage() {
   const wins = closed.filter((p) => (p.net_pnl ?? 0) > 0).length;
   const winRate = closed.length > 0 ? wins / closed.length : 0;
 
+  // Update last update time
+  useEffect(() => {
+    if (activeList) {
+      const now = new Date();
+      const time = now.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      setLastUpdate(`Última actualización: ${time} (cada 15s)`);
+    }
+  }, [activeList]);
+
   return (
     <div className="flex flex-col flex-1">
       <Header title="Positions" />
@@ -45,21 +55,26 @@ export default function PositionsPage() {
           <StatCard title="Win Rate (Closed)" value={formatPct(winRate)} subtitle={`Realized: ${formatUSD(closedPnl)}`} />
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-1 border-b border-gray-700">
-          {(["active", "closed"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-4 py-2 text-sm font-medium capitalize border-b-2 transition-colors ${
-                tab === t
-                  ? "border-blue-500 text-white"
-                  : "border-transparent text-gray-400 hover:text-white"
-              }`}
-            >
-              {t} ({t === "active" ? active.length : closed.length})
-            </button>
-          ))}
+        {/* Tabs + Last Update */}
+        <div className="flex gap-1 border-b border-gray-700 justify-between items-center">
+          <div className="flex gap-1">
+            {(["active", "closed"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`px-4 py-2 text-sm font-medium capitalize border-b-2 transition-colors ${
+                  tab === t
+                    ? "border-blue-500 text-white"
+                    : "border-transparent text-gray-400 hover:text-white"
+                }`}
+              >
+                {t} ({t === "active" ? active.length : closed.length})
+              </button>
+            ))}
+          </div>
+          <div className="text-xs text-gray-500 pr-2">
+            {lastUpdate}
+          </div>
         </div>
 
         <div className="bg-gray-800 rounded-lg border border-gray-700">
