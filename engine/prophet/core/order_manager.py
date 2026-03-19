@@ -54,12 +54,15 @@ def _utcnow() -> datetime:
 class OrderManager:
     """Manages paper order placement, fills, and position exits.
 
+    Each public scheduler job (place_pending_orders, check_fills, check_exits)
+    creates its own DB session to avoid concurrent-session errors.
+
     Parameters
     ----------
     clob_client:
         Started :class:`~prophet.polymarket.clob_client.PolymarketClient`.
     db_session:
-        SQLAlchemy async session.
+        Ignored — kept for backwards-compatibility.
     redis_client:
         Optional async Redis client.
     """
@@ -67,11 +70,10 @@ class OrderManager:
     def __init__(
         self,
         clob_client: PolymarketClient,
-        db_session: AsyncSession,
+        db_session: AsyncSession | None = None,
         redis_client: Any | None = None,
     ) -> None:
         self._clob = clob_client
-        self._db = db_session
         self._redis = redis_client
         self._ob_service = OrderBookService(
             clob_client=clob_client,
@@ -83,20 +85,8 @@ class OrderManager:
     # Order creation
     # ------------------------------------------------------------------
 
-    async def create_paper_order(self, signal: Any) -> Any:
-        """Create a PaperOrder from an approved Signal.
-
-        Parameters
-        ----------
-        signal:
-            A :class:`~prophet.db.models.Signal` ORM instance with
-            ``status='pending'``.
-
-        Returns
-        -------
-        PaperOrder
-            The newly created order row.
-        """
+    async def create_paper_order(self, db: AsyncSession, signal: Any) -> Any:
+        """Create a PaperOrder from an approved Signal."""
         from prophet.db.models import PaperOrder
 
         order = PaperOrder(
@@ -110,12 +100,12 @@ class OrderManager:
             status="open",
             placed_at=_utcnow(),
         )
-        self._db.add(order)
+        db.add(order)
 
         # Mark signal as executed
         signal.status = "executed"
 
-        await self._db.flush()
+        await db.flush()
         logger.info(
             "PaperOrder created: id=%d market_id=%d %s %s@%.4f $%.2f",
             order.id, order.market_id, order.strategy,
@@ -130,44 +120,34 @@ class OrderManager:
     async def place_pending_orders(self) -> int:
         """Convert all pending signals into open paper orders.
 
-        Called every 5 minutes by the scheduler.  Picks up any Signal with
-        ``status='pending'``, creates a :class:`PaperOrder` for each, and
-        marks the signal as ``'executed'``.
-
-        Returns
-        -------
-        int
-            Number of orders placed.
+        Called every 5 minutes by the scheduler.
         """
+        from prophet.db.database import get_session
         from prophet.db.models import Signal
 
-        stmt = select(Signal).where(Signal.status == "pending")
-        result = await self._db.execute(stmt)
-        pending = list(result.scalars().all())
+        async with get_session() as db:
+            stmt = select(Signal).where(Signal.status == "pending")
+            result = await db.execute(stmt)
+            pending = list(result.scalars().all())
 
-        if not pending:
-            return 0
+            if not pending:
+                return 0
 
-        placed = 0
-        for signal in pending:
-            try:
-                await self.create_paper_order(signal)
-                placed += 1
-            except Exception as exc:
-                logger.error(
-                    "place_pending_orders: failed for signal_id=%d: %s",
-                    signal.id, exc,
-                )
+            placed = 0
+            for signal in pending:
+                try:
+                    await self.create_paper_order(db, signal)
+                    placed += 1
+                except Exception as exc:
+                    logger.error(
+                        "place_pending_orders: failed for signal_id=%d: %s",
+                        signal.id, exc,
+                    )
 
-        try:
-            await self._db.commit()
-        except Exception as exc:
-            logger.error("place_pending_orders: commit failed: %s", exc)
-            await self._db.rollback()
-
-        if placed:
-            logger.info("place_pending_orders: placed %d order(s)", placed)
-        return placed
+            if placed:
+                logger.info("place_pending_orders: placed %d order(s)", placed)
+            return placed
+        return 0  # unreachable
 
     # ------------------------------------------------------------------
     # Fill checking
@@ -176,49 +156,36 @@ class OrderManager:
     async def check_fills(self) -> int:
         """Check all open paper orders for fills.
 
-        A paper order fills when an observed trade exists at or below the
-        target price with sufficient volume.
-
-        Returns
-        -------
-        int
-            Number of orders filled in this cycle.
+        Called every 2 minutes by the scheduler.
         """
-        from prophet.db.models import ObservedTrade, PaperOrder
+        from prophet.db.database import get_session
+        from prophet.db.models import PaperOrder
 
-        stmt = select(PaperOrder).where(PaperOrder.status == "open")
-        result = await self._db.execute(stmt)
-        open_orders = list(result.scalars().all())
+        async with get_session() as db:
+            stmt = select(PaperOrder).where(PaperOrder.status == "open")
+            result = await db.execute(stmt)
+            open_orders = list(result.scalars().all())
 
-        if not open_orders:
-            return 0
+            if not open_orders:
+                return 0
 
-        filled_count = 0
-        for order in open_orders:
-            try:
-                filled = await self._try_fill_order(order)
-                if filled:
-                    filled_count += 1
-            except Exception as exc:
-                logger.error(
-                    "check_fills: error processing order_id=%d: %s", order.id, exc
-                )
+            filled_count = 0
+            for order in open_orders:
+                try:
+                    filled = await self._try_fill_order(db, order)
+                    if filled:
+                        filled_count += 1
+                except Exception as exc:
+                    logger.error(
+                        "check_fills: error processing order_id=%d: %s", order.id, exc
+                    )
 
-        try:
-            await self._db.commit()
-        except Exception as exc:
-            logger.error("check_fills: commit failed: %s", exc)
-            await self._db.rollback()
+            logger.debug("check_fills: %d/%d orders filled", filled_count, len(open_orders))
+            return filled_count
+        return 0  # unreachable
 
-        logger.debug("check_fills: %d/%d orders filled", filled_count, len(open_orders))
-        return filled_count
-
-    async def _try_fill_order(self, order: Any) -> bool:
+    async def _try_fill_order(self, db: AsyncSession, order: Any) -> bool:
         """Attempt to fill one open paper order using orderbook snapshots.
-
-        Fill condition: the latest orderbook best_ask for the token is at or
-        below the order's target_price (meaning someone is willing to sell at
-        our price or better).  This avoids requiring authenticated /trades data.
 
         Returns True if filled.
         """
@@ -251,7 +218,7 @@ class OrderManager:
             .order_by(OrderBookSnapshot.timestamp.desc())
             .limit(1)
         )
-        result = await self._db.execute(stmt)
+        result = await db.execute(stmt)
         snapshot = result.scalar_one_or_none()
 
         if snapshot is None:
@@ -261,8 +228,6 @@ class OrderManager:
             )
             return False
 
-        # Fill condition: best_ask <= target_price means market is willing to
-        # sell at our price or cheaper — order would fill
         best_ask = snapshot.best_ask
         if best_ask is None or best_ask <= 0:
             return False
@@ -296,7 +261,7 @@ class OrderManager:
             status="open",
             opened_at=fill_at,
         )
-        self._db.add(position)
+        db.add(position)
 
         logger.info(
             "PaperOrder FILLED: id=%d market_id=%d %s %s@%.4f (ask=%.4f) $%.2f",
@@ -312,58 +277,49 @@ class OrderManager:
     async def check_exits(self) -> int:
         """Check all open positions for exit conditions.
 
-        Returns
-        -------
-        int
-            Number of positions closed in this cycle.
+        Called every 5 minutes by the scheduler.
         """
+        from prophet.db.database import get_session
         from prophet.db.models import Position
 
-        stmt = (
-            select(Position)
-            .where(Position.status == "open")
-        )
-        result = await self._db.execute(stmt)
-        open_positions = list(result.scalars().all())
+        async with get_session() as db:
+            stmt = select(Position).where(Position.status == "open")
+            result = await db.execute(stmt)
+            open_positions = list(result.scalars().all())
 
-        if not open_positions:
-            return 0
+            if not open_positions:
+                return 0
 
-        closed_count = 0
-        for position in open_positions:
-            try:
-                closed = await self._check_position_exit(position)
-                if closed:
-                    closed_count += 1
-            except Exception as exc:
-                logger.error(
-                    "check_exits: error for position_id=%d: %s", position.id, exc
-                )
+            closed_count = 0
+            for position in open_positions:
+                try:
+                    closed = await self._check_position_exit(db, position)
+                    if closed:
+                        closed_count += 1
+                except Exception as exc:
+                    logger.error(
+                        "check_exits: error for position_id=%d: %s", position.id, exc
+                    )
 
-        try:
-            await self._db.commit()
-        except Exception as exc:
-            logger.error("check_exits: commit failed: %s", exc)
-            await self._db.rollback()
+            logger.debug(
+                "check_exits: %d/%d positions closed", closed_count, len(open_positions)
+            )
+            return closed_count
+        return 0  # unreachable
 
-        logger.debug(
-            "check_exits: %d/%d positions closed", closed_count, len(open_positions)
-        )
-        return closed_count
-
-    async def _check_position_exit(self, position: Any) -> bool:
+    async def _check_position_exit(self, db: AsyncSession, position: Any) -> bool:
         """Evaluate exit conditions for one open position.
 
         Returns True if position was closed.
         """
-        from prophet.db.models import Market, Signal
+        from prophet.db.models import Market
 
         # Look up the signal to get exit_strategy
-        exit_strategy, exit_params = await self._get_exit_info(position)
+        exit_strategy, exit_params = await self._get_exit_info(db, position)
 
         # Fetch current market state
         market_stmt = select(Market).where(Market.id == position.market_id)
-        market_result = await self._db.execute(market_stmt)
+        market_result = await db.execute(market_stmt)
         market = market_result.scalar_one_or_none()
         if market is None:
             return False
@@ -478,25 +434,11 @@ class OrderManager:
     def calculate_pnl(
         self, position: Any, exit_price: float
     ) -> tuple[float, float, float]:
-        """Calculate gross PnL, fees, and net PnL for a position.
-
-        Parameters
-        ----------
-        position:
-            An open :class:`~prophet.db.models.Position`.
-        exit_price:
-            The price at which the position exits.
-
-        Returns
-        -------
-        (gross_pnl, fees, net_pnl)
-            All values in USD.
-        """
+        """Calculate gross PnL, fees, and net PnL for a position."""
         shares = position.shares or (
             position.size_usd / position.entry_price if position.entry_price else 0.0
         )
         gross_pnl = (exit_price - position.entry_price) * shares
-        # Polymarket charges ~2% on exit notional
         fees = exit_price * shares * _FEE_RATE
         net_pnl = gross_pnl - fees
         return round(gross_pnl, 4), round(fees, 4), round(net_pnl, 4)
@@ -506,18 +448,12 @@ class OrderManager:
     # ------------------------------------------------------------------
 
     async def _get_exit_info(
-        self, position: Any
+        self, db: AsyncSession, position: Any
     ) -> tuple[str, dict[str, Any]]:
-        """Return (exit_strategy, exit_params) for a position.
-
-        Looks up the originating signal's params dict.
-        Falls back to 'hold_to_resolution' if not found.
-        """
+        """Return (exit_strategy, exit_params) for a position."""
         try:
             from prophet.db.models import PaperOrder, Signal
 
-            # Find the paper order that opened this position
-            # (match by market, strategy, side, and entry time)
             stmt = (
                 select(PaperOrder)
                 .where(
@@ -531,12 +467,12 @@ class OrderManager:
                 .order_by(PaperOrder.filled_at.desc())
                 .limit(1)
             )
-            result = await self._db.execute(stmt)
+            result = await db.execute(stmt)
             order = result.scalar_one_or_none()
 
             if order and order.signal_id:
                 signal_stmt = select(Signal).where(Signal.id == order.signal_id)
-                signal_result = await self._db.execute(signal_stmt)
+                signal_result = await db.execute(signal_stmt)
                 signal = signal_result.scalar_one_or_none()
                 if signal and signal.params:
                     exit_strategy = signal.params.get("exit_strategy", "hold_to_resolution")
@@ -550,13 +486,15 @@ class OrderManager:
     async def _get_current_price(self, position: Any) -> float | None:
         """Get the current mid price for a position's side."""
         try:
+            from prophet.db.database import get_session
             from prophet.db.models import Market
 
-            market_stmt = select(Market).where(Market.id == position.market_id)
-            market_result = await self._db.execute(market_stmt)
-            market = market_result.scalar_one_or_none()
-            if market is None:
-                return None
+            async with get_session() as db:
+                market_stmt = select(Market).where(Market.id == position.market_id)
+                market_result = await db.execute(market_stmt)
+                market = market_result.scalar_one_or_none()
+                if market is None:
+                    return None
 
             token_id = (
                 market.token_id_yes if position.side == "YES" else market.token_id_no
@@ -577,10 +515,7 @@ class OrderManager:
 
     @staticmethod
     def _resolution_exit_price(side: str, resolved_outcome: str) -> float:
-        """Return the exit price based on resolution outcome.
-
-        Winning side pays out $1.00 per share; losing side pays $0.00.
-        """
+        """Return the exit price based on resolution outcome."""
         side = side.upper()
         outcome = str(resolved_outcome).upper()
         if (side == "YES" and outcome == "YES") or (side == "NO" and outcome == "NO"):
