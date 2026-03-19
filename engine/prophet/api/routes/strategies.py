@@ -112,8 +112,26 @@ async def toggle_strategy(
         row.enabled = not row.enabled
 
     await db.flush()
+
+    # When disabling, cancel all pending signals for this strategy
+    cancelled_count = 0
+    if not row.enabled:
+        from prophet.db.models import Signal
+        from sqlalchemy import update
+        upd = (
+            update(Signal)
+            .where(Signal.strategy == name, Signal.status == "pending")
+            .values(status="cancelled")
+        )
+        result_upd = await db.execute(upd)
+        cancelled_count = result_upd.rowcount or 0
+
+    await db.commit()
     state = "enabled" if row.enabled else "disabled"
-    return MessageResponse(message=f"Strategy {name!r} is now {state}.")
+    msg = f"Strategy {name!r} is now {state}."
+    if cancelled_count:
+        msg += f" {cancelled_count} pending signal(s) cancelled."
+    return MessageResponse(message=msg)
 
 
 @router.get("/{name}/config", response_model=StrategyConfigResponse | None)

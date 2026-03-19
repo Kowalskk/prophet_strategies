@@ -68,30 +68,33 @@ async def _lifespan(app: FastAPI):
         clob_client = PolymarketClient()
         await clob_client.start()
 
-        # Create a persistent session for scheduler tasks.
-        # We intentionally do NOT use the get_session() context manager here —
-        # that would close the session immediately after start().
-        # Each component calls commit() at the end of its own job methods.
+        # Each scheduler component gets its OWN session to avoid cross-job
+        # session state conflicts (e.g. "Session is already flushing").
         from prophet.db.database import get_session_factory
-        _db_session = get_session_factory()()
+        _sf = get_session_factory()
 
-        scanner = MarketScanner(gamma_client=gamma_client, db_session=_db_session)
-        ob_service = OrderBookService(clob_client=clob_client, db_session=_db_session)
-        price_service = PriceFeedService(db_session=_db_session)
+        _db_scanner   = _sf()
+        _db_collector = _sf()
+        _db_signal    = _sf()
+        _db_order     = _sf()
+
+        scanner = MarketScanner(gamma_client=gamma_client, db_session=_db_scanner)
+        ob_service = OrderBookService(clob_client=clob_client, db_session=_db_collector)
+        price_service = PriceFeedService(db_session=_db_collector)
         data_collector = DataCollector(
             clob_client=clob_client,
-            db_session=_db_session,
+            db_session=_db_collector,
             redis_client=None,
         )
-        risk_mgr = RiskManager(db_session=_db_session)
+        risk_mgr = RiskManager(db_session=_db_signal)
         signal_gen = SignalGenerator(
             clob_client=clob_client,
-            db_session=_db_session,
+            db_session=_db_signal,
             risk_manager=risk_mgr,
         )
         order_mgr = OrderManager(
             clob_client=clob_client,
-            db_session=_db_session,
+            db_session=_db_order,
         )
 
         _scheduler = Scheduler(
@@ -104,7 +107,7 @@ async def _lifespan(app: FastAPI):
 
         # Store scheduler on app state so shutdown can stop it
         app.state.scheduler = _scheduler
-        app.state.db_session = _db_session
+        app.state.db_session = _db_signal
         app.state.gamma_client = gamma_client
         app.state.clob_client = clob_client
         logger.info("Scheduler started.")
