@@ -1,5 +1,14 @@
 // TypeScript interfaces matching engine/prophet/api/schemas.py exactly
 
+export interface SidePrice {
+  bid: number | null;
+  ask: number | null;
+  ts: string | null;
+}
+
+/** market_id (as string key) → { yes: SidePrice, no: SidePrice } */
+export type MarketPrices = Record<string, { yes?: SidePrice; no?: SidePrice }>;
+
 export interface Health {
   status: string;
   version: string;

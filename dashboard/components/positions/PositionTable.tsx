@@ -1,12 +1,15 @@
 "use client";
 
-import type { Position } from "@/lib/types";
+import type { Position, MarketPrices } from "@/lib/types";
 import { formatUSD, formatDate, getPnLColor } from "@/lib/utils";
+import { getMarketPrice } from "@/hooks/usePrices";
 import { api } from "@/lib/api";
 import { useState } from "react";
+import PriceBadge from "@/components/common/PriceBadge";
 
 interface PositionTableProps {
   positions: Position[];
+  prices?: MarketPrices;
   onClose?: () => void;
 }
 
@@ -18,7 +21,7 @@ function ageString(openedAt: string): string {
   return `${h}h`;
 }
 
-export default function PositionTable({ positions, onClose }: PositionTableProps) {
+export default function PositionTable({ positions, prices, onClose }: PositionTableProps) {
   const [closing, setClosing] = useState<number | null>(null);
 
   const handleClose = async (id: number) => {
@@ -38,6 +41,7 @@ export default function PositionTable({ positions, onClose }: PositionTableProps
             <th className="text-left py-3 px-2 font-medium">Side</th>
             <th className="text-right py-3 px-2 font-medium">Entry</th>
             <th className="text-right py-3 px-2 font-medium">Current</th>
+            <th className="text-center py-3 px-2 font-medium">Bid / Ask</th>
             <th className="text-right py-3 px-2 font-medium">Unrealized P&L</th>
             <th className="text-right py-3 px-2 font-medium">Age</th>
             <th className="text-right py-3 px-2 font-medium">Actions</th>
@@ -46,6 +50,11 @@ export default function PositionTable({ positions, onClose }: PositionTableProps
         <tbody>
           {positions.map((pos) => {
             const pnl = pos.unrealized_pnl ?? pos.net_pnl ?? 0;
+            const mp = getMarketPrice(prices, pos.market_id);
+            // Show the bid/ask for the side of the position
+            const bid = pos.side === "YES" ? mp.yesBid : mp.noBid;
+            const ask = pos.side === "YES" ? mp.yesAsk : mp.noAsk;
+
             return (
               <tr key={pos.id} className="border-b border-gray-700/50 hover:bg-gray-800">
                 <td className="py-3 px-3 text-gray-200">Market #{pos.market_id}</td>
@@ -62,6 +71,9 @@ export default function PositionTable({ positions, onClose }: PositionTableProps
                 </td>
                 <td className="py-3 px-2 text-right text-gray-300 font-mono">
                   {pos.current_price != null ? pos.current_price.toFixed(3) : "—"}
+                </td>
+                <td className="py-3 px-2 text-center">
+                  <PriceBadge bid={bid} ask={ask} side={pos.side as "YES" | "NO"} />
                 </td>
                 <td className={`py-3 px-2 text-right font-mono font-medium ${getPnLColor(pnl)}`}>
                   {formatUSD(pnl)}
@@ -88,7 +100,7 @@ export default function PositionTable({ positions, onClose }: PositionTableProps
           })}
           {positions.length === 0 && (
             <tr>
-              <td colSpan={8} className="py-8 text-center text-gray-400">
+              <td colSpan={9} className="py-8 text-center text-gray-400">
                 No positions.
               </td>
             </tr>

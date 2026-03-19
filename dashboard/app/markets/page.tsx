@@ -4,6 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { fetcher, api } from "@/lib/api";
 import type { MarketList, Market, Strategy, OrderBook } from "@/lib/types";
+import { usePrices } from "@/hooks/usePrices";
 import Header from "@/components/layout/Header";
 import MarketTable from "@/components/markets/MarketTable";
 import StrategySelector from "@/components/markets/StrategySelector";
@@ -22,6 +23,7 @@ export default function MarketsPage() {
     { refreshInterval: 30000 }
   );
   const { data: strategies } = useSWR<Strategy[]>("/strategies", fetcher);
+  const { data: prices } = usePrices(30000);
   const { data: orderbook } = useSWR<OrderBook>(
     selected ? `/markets/${selected.id}/orderbook` : null,
     () => api.marketOrderBook(selected!.id) as Promise<OrderBook>,
@@ -59,6 +61,7 @@ export default function MarketsPage() {
           ) : (
             <MarketTable
               markets={marketList?.items ?? []}
+              prices={prices ?? undefined}
               onRowClick={setSelected}
               selectedId={selected?.id}
             />

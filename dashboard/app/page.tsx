@@ -4,6 +4,7 @@ import useSWR from "swr";
 import Link from "next/link";
 import { fetcher } from "@/lib/api";
 import type { PerformanceSummary, SystemStatus, PositionList, PnLPoint, SignalList, SignalSummaryItem } from "@/lib/types";
+import { usePrices } from "@/hooks/usePrices";
 import StatCard from "@/components/common/StatCard";
 import KillSwitch from "@/components/common/KillSwitch";
 import PnLChart from "@/components/charts/PnLChart";
@@ -21,6 +22,7 @@ export default function HomePage() {
   const { data: positionList, mutate: mutatePositions } = useSWR<PositionList>("/positions", fetcher, { refreshInterval: REFRESH });
   const { data: history } = useSWR<PnLPoint[]>("/performance/history", fetcher, { refreshInterval: REFRESH });
   const { data: recentSignals } = useSWR<SignalList>("/signals?limit=10", fetcher, { refreshInterval: REFRESH });
+  const { data: prices } = usePrices(30000);
   const { data: signalSummary } = useSWR<SignalSummaryItem[]>("/signals/summary", fetcher, { refreshInterval: REFRESH });
 
   const positions = positionList?.items ?? [];
@@ -154,6 +156,7 @@ export default function HomePage() {
             ) : (
               <PositionTable
                 positions={positions.slice(0, 5)}
+                prices={prices ?? undefined}
                 onClose={() => { mutatePositions(); mutateStatus(); }}
               />
             )}

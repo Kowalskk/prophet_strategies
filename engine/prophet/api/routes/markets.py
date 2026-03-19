@@ -67,6 +67,57 @@ async def list_markets(
     )
 
 
+@router.get("/prices", response_model=dict)
+async def bulk_prices(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return latest YES/NO best_bid and best_ask for every market in one query."""
+    from prophet.db.models import Market, OrderBookSnapshot
+    from sqlalchemy import and_
+
+    # Subquery: latest snapshot id per (market_id, side)
+    sub = (
+        select(
+            OrderBookSnapshot.market_id,
+            OrderBookSnapshot.side,
+            func.max(OrderBookSnapshot.id).label("max_id"),
+        )
+        .group_by(OrderBookSnapshot.market_id, OrderBookSnapshot.side)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            OrderBookSnapshot.market_id,
+            OrderBookSnapshot.side,
+            OrderBookSnapshot.best_bid,
+            OrderBookSnapshot.best_ask,
+            OrderBookSnapshot.timestamp,
+        )
+        .join(
+            sub,
+            and_(
+                OrderBookSnapshot.market_id == sub.c.market_id,
+                OrderBookSnapshot.side == sub.c.side,
+                OrderBookSnapshot.id == sub.c.max_id,
+            ),
+        )
+    )
+
+    rows = (await db.execute(stmt)).all()
+
+    prices: dict[int, dict] = {}
+    for row in rows:
+        mid = prices.setdefault(row.market_id, {})
+        mid[row.side] = {
+            "bid": row.best_bid,
+            "ask": row.best_ask,
+            "ts": row.timestamp.isoformat() if row.timestamp else None,
+        }
+
+    return prices
+
+
 @router.get("/{condition_id}", response_model=MarketResponse)
 async def get_market(
     condition_id: str,

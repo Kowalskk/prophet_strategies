@@ -4,8 +4,10 @@ import useSWR from "swr";
 import { useState } from "react";
 import { fetcher } from "@/lib/api";
 import type { SignalList, SignalSummaryItem } from "@/lib/types";
+import { usePrices, getMarketPrice } from "@/hooks/usePrices";
 import Header from "@/components/layout/Header";
 import Loading from "@/components/common/Loading";
+import PriceBadge from "@/components/common/PriceBadge";
 import { formatUSD } from "@/lib/utils";
 import { Activity, TrendingUp, TrendingDown } from "lucide-react";
 
@@ -40,6 +42,7 @@ export default function SignalsPage() {
     fetcher,
     { refreshInterval: REFRESH }
   );
+  const { data: prices } = usePrices(30000);
 
   const signals = signalList?.items ?? [];
   const total = signalList?.total ?? 0;
@@ -155,6 +158,7 @@ export default function SignalsPage() {
                       <th className="text-left pb-3 pr-4">Market</th>
                       <th className="text-left pb-3 pr-4">Side</th>
                       <th className="text-right pb-3 pr-4">Target Price</th>
+                      <th className="text-center pb-3 pr-4">Bid / Ask</th>
                       <th className="text-right pb-3 pr-4">Size</th>
                       <th className="text-right pb-3 pr-4">Confidence</th>
                       <th className="text-right pb-3">Status</th>
@@ -192,6 +196,14 @@ export default function SignalsPage() {
                         </td>
                         <td className="py-2.5 pr-4 text-right text-slate-300 font-mono text-xs">
                           {(sig.target_price * 100).toFixed(1)}¢
+                        </td>
+                        <td className="py-2.5 pr-4 text-center">
+                          {(() => {
+                            const mp = getMarketPrice(prices, sig.market_id);
+                            const bid = sig.side === "YES" ? mp.yesBid : mp.noBid;
+                            const ask = sig.side === "YES" ? mp.yesAsk : mp.noAsk;
+                            return <PriceBadge bid={bid} ask={ask} side={sig.side as "YES" | "NO"} />;
+                          })()}
                         </td>
                         <td className="py-2.5 pr-4 text-right text-slate-300 text-xs">
                           {formatUSD(sig.size_usd)}

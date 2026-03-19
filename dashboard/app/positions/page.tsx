@@ -4,6 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 import type { PositionList, ClosedPositionList } from "@/lib/types";
+import { usePrices } from "@/hooks/usePrices";
 import Header from "@/components/layout/Header";
 import PositionTable from "@/components/positions/PositionTable";
 import StatCard from "@/components/common/StatCard";
@@ -19,6 +20,7 @@ export default function PositionsPage() {
     useSWR<PositionList>("/positions", fetcher, { refreshInterval: REFRESH });
   const { data: closedList, isLoading: loadingClosed } =
     useSWR<ClosedPositionList>("/positions/closed", fetcher, { refreshInterval: REFRESH });
+  const { data: prices } = usePrices(30000);
 
   const active = activeList?.items ?? [];
   const closed = closedList?.items ?? [];
@@ -59,10 +61,10 @@ export default function PositionsPage() {
 
         <div className="bg-gray-800 rounded-lg border border-gray-700">
           {tab === "active" && (
-            loadingActive ? <Loading /> : <PositionTable positions={active} onClose={() => mutateActive()} />
+            loadingActive ? <Loading /> : <PositionTable positions={active} prices={prices ?? undefined} onClose={() => mutateActive()} />
           )}
           {tab === "closed" && (
-            loadingClosed ? <Loading /> : <PositionTable positions={closed} />
+            loadingClosed ? <Loading /> : <PositionTable positions={closed} prices={prices ?? undefined} />
           )}
         </div>
       </div>

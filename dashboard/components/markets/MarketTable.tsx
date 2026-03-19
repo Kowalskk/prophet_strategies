@@ -1,18 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import type { Market } from "@/lib/types";
+import type { Market, MarketPrices } from "@/lib/types";
+import { getMarketPrice } from "@/hooks/usePrices";
 import { formatDate } from "@/lib/utils";
+import PriceBadge from "@/components/common/PriceBadge";
 
 interface MarketTableProps {
   markets: Market[];
+  prices?: MarketPrices;
   onRowClick?: (market: Market) => void;
   selectedId?: number;
 }
 
 type SortKey = "resolution_date" | "crypto" | "status";
 
-export default function MarketTable({ markets, onRowClick, selectedId }: MarketTableProps) {
+export default function MarketTable({ markets, prices, onRowClick, selectedId }: MarketTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("resolution_date");
   const [sortAsc, setSortAsc] = useState(true);
 
@@ -46,50 +49,53 @@ export default function MarketTable({ markets, onRowClick, selectedId }: MarketT
             <th className="text-left py-3 px-2 font-medium">
               <SortBtn k="resolution_date" label="Resolves" />
             </th>
-            <th className="text-left py-3 px-2 font-medium">YES Price</th>
-            <th className="text-left py-3 px-2 font-medium">NO Price</th>
+            <th className="text-center py-3 px-2 font-medium">YES bid/ask</th>
+            <th className="text-center py-3 px-2 font-medium">NO bid/ask</th>
             <th className="text-left py-3 px-2 font-medium">
               <SortBtn k="status" label="Status" />
             </th>
           </tr>
         </thead>
         <tbody>
-          {sorted.map((market) => (
-            <tr
-              key={market.id}
-              onClick={() => onRowClick?.(market)}
-              className={`border-b border-gray-700/50 cursor-pointer transition-colors ${
-                selectedId === market.id
-                  ? "bg-blue-900/30"
-                  : "hover:bg-gray-800"
-              }`}
-            >
-              <td className="py-3 px-3 max-w-xs">
-                <span className="text-gray-200 line-clamp-2">{market.question}</span>
-              </td>
-              <td className="py-3 px-2">
-                <span className="bg-gray-700 text-gray-200 px-2 py-0.5 rounded text-xs font-mono">
-                  {market.crypto}
-                </span>
-              </td>
-              <td className="py-3 px-2 text-gray-300">
-                {market.resolution_date ? formatDate(market.resolution_date) : "—"}
-              </td>
-              <td className="py-3 px-2 text-green-400 font-mono">—</td>
-              <td className="py-3 px-2 text-red-400 font-mono">—</td>
-              <td className="py-3 px-2">
-                <span
-                  className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+          {sorted.map((market) => {
+            const { yesBid, yesAsk, noBid, noAsk } = getMarketPrice(prices, market.id);
+            return (
+              <tr
+                key={market.id}
+                onClick={() => onRowClick?.(market)}
+                className={`border-b border-gray-700/50 cursor-pointer transition-colors ${
+                  selectedId === market.id ? "bg-blue-900/30" : "hover:bg-gray-800"
+                }`}
+              >
+                <td className="py-3 px-3 max-w-xs">
+                  <span className="text-gray-200 line-clamp-2">{market.question}</span>
+                </td>
+                <td className="py-3 px-2">
+                  <span className="bg-gray-700 text-gray-200 px-2 py-0.5 rounded text-xs font-mono">
+                    {market.crypto}
+                  </span>
+                </td>
+                <td className="py-3 px-2 text-gray-300">
+                  {market.resolution_date ? formatDate(market.resolution_date) : "—"}
+                </td>
+                <td className="py-3 px-2 text-center">
+                  <PriceBadge bid={yesBid} ask={yesAsk} side="YES" />
+                </td>
+                <td className="py-3 px-2 text-center">
+                  <PriceBadge bid={noBid} ask={noAsk} side="NO" />
+                </td>
+                <td className="py-3 px-2">
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                     market.status === "active"
                       ? "bg-green-900/50 text-green-400"
                       : "bg-gray-700 text-gray-400"
-                  }`}
-                >
-                  {market.status}
-                </span>
-              </td>
-            </tr>
-          ))}
+                  }`}>
+                    {market.status}
+                  </span>
+                </td>
+              </tr>
+            );
+          })}
           {sorted.length === 0 && (
             <tr>
               <td colSpan={6} className="py-8 text-center text-gray-400">
