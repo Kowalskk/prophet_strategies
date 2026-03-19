@@ -133,6 +133,8 @@ def _register_builtins() -> None:
         if cls.name not in STRATEGY_REGISTRY:
             STRATEGY_REGISTRY[cls.name] = cls
             logger.debug("Auto-registered built-in strategy: %r", cls.name)
+        else:
+            logger.debug("Strategy %r already registered", cls.name)
 
 
 _register_builtins()

@@ -164,6 +164,7 @@ export default function SignalsPage() {
                       <th className="text-left pb-3 pr-4">Market</th>
                       <th className="text-left pb-3 pr-4">Side</th>
                       <th className="text-right pb-3 pr-4">Target Price</th>
+                      <th className="text-right pb-3 pr-4">Remaining</th>
                       <th className="text-center pb-3 pr-4">Bid / Ask</th>
                       <th className="text-right pb-3 pr-4">Size</th>
                       <th className="text-right pb-3 pr-4">Confidence</th>
@@ -207,6 +208,19 @@ export default function SignalsPage() {
                         </td>
                         <td className="py-2.5 pr-4 text-right text-slate-300 font-mono text-xs">
                           {(sig.target_price * 100).toFixed(1)}¢
+                        </td>
+                        <td className="py-2.5 pr-4 text-right font-mono text-xs">
+                          {(() => {
+                            const mp = getMarketPrice(prices, sig.market_id);
+                            const ask = sig.side === "YES" ? mp.yesAsk : mp.noAsk;
+                            if (ask == null) return <span className="text-slate-500">—</span>;
+                            const diff = ask - sig.target_price;
+                            const diffCents = (diff * 100).toFixed(1);
+                            if (diff <= 0) {
+                              return <span className="text-green-400 font-bold">✓ Fill now</span>;
+                            }
+                            return <span className="text-orange-400">-{diffCents}¢</span>;
+                          })()}
                         </td>
                         <td className="py-2.5 pr-4 text-center">
                           {(() => {
