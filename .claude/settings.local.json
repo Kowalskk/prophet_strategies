@@ -17,7 +17,8 @@
       "Bash(npm install:*)",
       "Bash(npm run:*)",
       "Bash(.venv/Scripts/python.exe -c \"from prophet.main import main; print\\(''Main OK''\\)\")",
-      "Bash(ls \"C:\\\\Users\\\\torra\\\\OneDrive\\\\Documentos\\\\Polymarket Strategies\\\\engine\\\\prophet\\\\api\\\\routes\"\" 2>&1 && ls \"C:UserstorraOneDriveDocumentosPolymarket Strategiesengineprophetcore\"\")"
+      "Bash(ls \"C:\\\\Users\\\\torra\\\\OneDrive\\\\Documentos\\\\Polymarket Strategies\\\\engine\\\\prophet\\\\api\\\\routes\"\" 2>&1 && ls \"C:UserstorraOneDriveDocumentosPolymarket Strategiesengineprophetcore\"\")",
+      "Bash(npx vercel@latest ls)"
     ]
   }
 }

@@ -1,0 +1,37 @@
+=== PROPHET STRATEGIES SUMMARY ===
+Total Progress: 20,476 / 22,950 (89.22%)
+
+--- 📊 AVERAGE METRICS BY STRATEGY & CRYPTO ---
+         strategy crypto    roi_pct  win_rate  total_trades
+        stink_bid    BTC 318.552506  0.129233        6908.0
+        stink_bid    ETH 498.768812  0.131950        6904.0
+        stink_bid    SOL 477.020645  0.140050        6708.0
+volatility_spread    BTC 292.276146  0.371160        3454.0
+volatility_spread    ETH 457.196250  0.350159        3452.0
+volatility_spread    SOL 467.769896  0.393577        3354.0
+
+--- 🏆 TOP 3 CONFIGURATIONS BY ROI PER CRYPTO ---
+
+👉 BTC
+  - ROI: 672.00% | WinRate: 0.1015 | Trades: 20476 (total df size)
+    Params: {'exit_strategy': 'hold_to_resolution'}
+  - ROI: 672.00% | WinRate: 0.1015 | Trades: 20476 (total df size)
+    Params: {'exit_strategy': 'hold_to_resolution'}
+  - ROI: 672.00% | WinRate: 0.1015 | Trades: 20476 (total df size)
+    Params: {'exit_strategy': 'hold_to_resolution'}
+
+👉 ETH
+  - ROI: 1085.51% | WinRate: 0.0641 | Trades: 20476 (total df size)
+    Params: {'exit_strategy': 'hold_to_resolution'}
+  - ROI: 1019.30% | WinRate: 0.0492 | Trades: 20476 (total df size)
+    Params: {'exit_strategy': 'hold_to_resolution'}
+  - ROI: 1010.94% | WinRate: 0.0257 | Trades: 20476 (total df size)
+    Params: {'tier1_price': 0.07, 'tier2_price': 0.01, 'tier1_capital': 100.0, 'tier2_capital': 1.0, 'exit_strategy': 'hold_to_resolution'}
+
+👉 SOL
+  - ROI: 2587.26% | WinRate: 0.0270 | Trades: 20476 (total df size)
+    Params: {'exit_strategy': 'hold_to_resolution'}
+  - ROI: 1771.16% | WinRate: 0.0027 | Trades: 20476 (total df size)
+    Params: {'tier1_price': 0.02, 'tier2_price': 0.001, 'tier1_capital': 100.0, 'tier2_capital': 1.0, 'exit_strategy': 'hold_to_resolution'}
+  - ROI: 1715.29% | WinRate: 0.0020 | Trades: 20476 (total df size)
+    Params: {'tier1_price': 0.02, 'tier2_price': 0.002, 'tier1_capital': 100.0, 'tier2_capital': 1.0, 'exit_strategy': 'hold_to_resolution'}
