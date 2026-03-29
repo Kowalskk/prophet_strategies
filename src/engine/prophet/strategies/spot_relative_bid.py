@@ -262,8 +262,143 @@ class SrbHighX4(SpotRelativeBidStrategy):
         "exit_strategy": "sell_at_target", "sell_target_pct": 300.0}
 
 
+class GenericSRBStrategy(StrategyBase):
+    """SRB for non-crypto markets (sports, politics, etc.) — no spot price needed.
+
+    Uses current order book prices to find cheap sides. Applies NO-bias at low
+    prices based on Becker 2026 research: NO@<10¢ has +23% EV vs YES -41% EV.
+    """
+
+    name = "srb_generic"
+    description = (
+        "Generic SRB for non-crypto markets. Bids on cheap sides with NO-bias "
+        "at low prices (research: NO@<10¢ = +23% EV, YES@<10¢ = -41% EV)."
+    )
+    default_params: dict[str, Any] = {
+        "max_price": 0.10,          # only bid on sides priced below this
+        "tier1_price": 0.04,        # bid price for tier 1
+        "tier1_capital": 30.0,
+        "tier2_price": 0.01,        # bid price for tier 2 (ultra cheap)
+        "tier2_capital": 5.0,
+        "no_bias": True,            # prefer NO side at low prices (Becker 2026)
+        "no_bias_threshold": 0.10,  # apply NO-bias when price < this
+        "exit_strategy": "hold_to_resolution",
+        "sell_target_pct": 100.0,
+    }
+
+    async def evaluate(
+        self,
+        market: Any,
+        orderbook: dict[str, Any],
+        spot_price: float,
+        params: dict[str, Any],
+    ) -> list[TradeSignal]:
+        p = self.validate_params(params)
+
+        signals: list[TradeSignal] = []
+
+        for side_name in ("yes", "no"):
+            book = orderbook.get(side_name)
+            if book is None:
+                continue
+
+            best_ask = getattr(book, "best_ask", None)
+            if best_ask is None:
+                asks = getattr(book, "asks", None)
+                if asks:
+                    best_ask = float(asks[0].price)
+            if best_ask is None or best_ask > p["max_price"]:
+                continue
+
+            # NO-bias: at low prices, skip YES side (Becker 2026: YES@<10¢ = -41% EV)
+            if p["no_bias"] and best_ask < p["no_bias_threshold"] and side_name == "yes":
+                logger.debug(
+                    "%s: market_id=%s skipping YES@%.3f (NO-bias active)",
+                    self.name, market.id, best_ask,
+                )
+                continue
+
+            side = side_name.upper()
+            exit_params = {"target_pct": p["sell_target_pct"]} if p["exit_strategy"] == "sell_at_target" else {}
+
+            # Tier 1
+            if best_ask > p["tier1_price"]:
+                signals.append(TradeSignal(
+                    market_id=market.id,
+                    side=side,
+                    target_price=p["tier1_price"],
+                    size_usd=p["tier1_capital"],
+                    confidence=0.50,
+                    exit_strategy=p["exit_strategy"],
+                    exit_params=exit_params,
+                    metadata={
+                        "tier": "tier1",
+                        "best_ask": best_ask,
+                        "no_bias": p["no_bias"],
+                        "potential_multiplier": round(1.0 / p["tier1_price"], 1),
+                    },
+                    strategy=self.name,
+                ))
+
+            # Tier 2
+            if best_ask > p["tier2_price"]:
+                signals.append(TradeSignal(
+                    market_id=market.id,
+                    side=side,
+                    target_price=p["tier2_price"],
+                    size_usd=p["tier2_capital"],
+                    confidence=0.40,
+                    exit_strategy=p["exit_strategy"],
+                    exit_params=exit_params,
+                    metadata={
+                        "tier": "tier2",
+                        "best_ask": best_ask,
+                        "no_bias": p["no_bias"],
+                        "potential_multiplier": round(1.0 / p["tier2_price"], 1),
+                    },
+                    strategy=self.name,
+                ))
+
+        if signals:
+            logger.info(
+                "%s: market_id=%d → %d signal(s)", self.name, market.id, len(signals),
+            )
+        return signals
+
+    def validate_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        p = self._merge_params(params)
+        for k in ("max_price", "tier1_price", "tier2_price", "tier1_capital",
+                   "tier2_capital", "no_bias_threshold", "sell_target_pct"):
+            p[k] = float(p[k])
+        p["no_bias"] = bool(p["no_bias"])
+        return p
+
+
+class GenericSrbRes(GenericSRBStrategy):
+    name = "srb_generic_res"
+    description = "Generic SRB: 4¢/1¢ tiers · hold to resolution · NO-bias"
+
+
+class GenericSrbX5(GenericSRBStrategy):
+    name = "srb_generic_x5"
+    description = "Generic SRB: 4¢/1¢ tiers · sell at 5× · NO-bias"
+    default_params = {**GenericSRBStrategy.default_params,
+        "exit_strategy": "sell_at_target", "sell_target_pct": 400.0}
+
+
+class GenericSrbX10(GenericSRBStrategy):
+    name = "srb_generic_x10"
+    description = "Generic SRB: 4¢/1¢ tiers · sell at 10× · NO-bias"
+    default_params = {**GenericSRBStrategy.default_params,
+        "exit_strategy": "sell_at_target", "sell_target_pct": 900.0}
+
+
+ALL_GENERIC_SRB_CLASSES = [GenericSrbRes, GenericSrbX5, GenericSrbX10]
+
+
 ALL_SRB_CLASSES = [
     SrbCheapRes, SrbCheapX5, SrbCheapX10,
     SrbMidRes, SrbMidX3, SrbMidX5,
     SrbHighRes, SrbHighX2, SrbHighX4,
+    *ALL_GENERIC_SRB_CLASSES,
 ]

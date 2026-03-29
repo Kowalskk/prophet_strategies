@@ -29,6 +29,7 @@ from prophet.polymarket.orderbook import OrderBookService
 from prophet.polymarket.price_feeds import PriceFeedService
 from prophet.strategies.base import TradeSignal
 from prophet.strategies.registry import get_strategy, STRATEGY_REGISTRY
+from prophet.core.scanner import CATEGORY_STRATEGIES, CATEGORY_SIZE_MULTIPLIER
 
 if TYPE_CHECKING:
     from prophet.core.risk_manager import RiskManager
@@ -153,11 +154,18 @@ class SignalGenerator:
 
         new_db_signals: list[Any] = []
 
+        # Category-aware filtering: only run strategies assigned to this category
+        category = getattr(market, "category", None) or "crypto"
+        allowed = set(CATEGORY_STRATEGIES.get(category, CATEGORY_STRATEGIES["default"]))
+        size_mult = CATEGORY_SIZE_MULTIPLIER.get(category, CATEGORY_SIZE_MULTIPLIER["default"])
+
         for config in strategy_configs:
             if not config.enabled:
                 continue
 
             strategy_name = config.strategy
+            if strategy_name not in allowed:
+                continue
             if strategy_name not in STRATEGY_REGISTRY:
                 logger.warning("Unknown strategy in config: %r", strategy_name)
                 continue
@@ -177,6 +185,8 @@ class SignalGenerator:
 
             for signal in signals:
                 signal.strategy = strategy_name
+                # Apply category-based size multiplier
+                signal.size_usd = round(signal.size_usd * size_mult, 2)
                 db_signal = await self._process_signal(signal, params)
                 if db_signal is not None:
                     new_db_signals.append(db_signal)
@@ -318,11 +328,13 @@ class SignalGenerator:
             )
             return None
 
-    async def _get_spot_price(self, crypto: str) -> float:
+    async def _get_spot_price(self, crypto: str | None) -> float:
         """Return the latest spot price for a crypto symbol.
 
         Falls back to 0.0 if price data is unavailable.
         """
+        if not crypto:
+            return 0.0
         try:
             await self._price_service.start()
             price_data = await self._price_service.get_cached(crypto)

@@ -82,9 +82,13 @@ class Market(Base):
         String(1024), nullable=False,
         comment="Full question text as displayed on Polymarket.",
     )
-    crypto: Mapped[str] = mapped_column(
-        String(10), nullable=False,
-        comment="Crypto symbol: BTC, ETH, or SOL.",
+    crypto: Mapped[str | None] = mapped_column(
+        String(10), nullable=True,
+        comment="Crypto symbol: BTC, ETH, SOL, or NULL for non-crypto markets.",
+    )
+    category: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, index=True,
+        comment="Market category: crypto, sports, politics, entertainment, etc.",
     )
     threshold: Mapped[float | None] = mapped_column(
         Float, nullable=True,

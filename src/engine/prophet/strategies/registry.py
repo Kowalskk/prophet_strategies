@@ -124,7 +124,7 @@ def _register_builtins() -> None:
     from prophet.strategies.volatility_spread_variants import (
         VolatilitySpreadX3, VolatilitySpreadX4, VolatilitySpreadX5,
     )
-    from prophet.strategies.spot_relative_bid import ALL_SRB_CLASSES
+    from prophet.strategies.spot_relative_bid import ALL_SRB_CLASSES, ALL_GENERIC_SRB_CLASSES
     from prophet.strategies.reversal_strategy import (
         ReversalStrategy,
         ReversalAggressiveStrategy,
@@ -152,6 +152,8 @@ def _register_builtins() -> None:
         PreWindowEarlyStrategy,
         PreWindowLateStrategy,
     )
+    from prophet.strategies.political_favourite import ALL_POLITICAL_FAVOURITE_CLASSES
+    from prophet.strategies.weather_fade import ALL_WEATHER_FADE_CLASSES
 
     for cls in [
         VolatilitySpreadStrategy,
@@ -161,6 +163,7 @@ def _register_builtins() -> None:
         VolatilitySpreadX4,
         VolatilitySpreadX5,
         *ALL_SRB_CLASSES,
+        *ALL_GENERIC_SRB_CLASSES,
         ReversalStrategy,
         ReversalAggressiveStrategy,
         ReversalDeepStrategy,
@@ -178,6 +181,8 @@ def _register_builtins() -> None:
         PreWindowStrategy,
         PreWindowEarlyStrategy,
         PreWindowLateStrategy,
+        *ALL_POLITICAL_FAVOURITE_CLASSES,
+        *ALL_WEATHER_FADE_CLASSES,
     ]:
         if cls.name not in STRATEGY_REGISTRY:
             STRATEGY_REGISTRY[cls.name] = cls
