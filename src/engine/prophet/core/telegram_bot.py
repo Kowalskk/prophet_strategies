@@ -181,8 +181,8 @@ class TelegramNotifier:
 
     async def _cmd_status(self) -> None:
         from prophet.db.database import get_session
-        from prophet.db.models import SystemState
-        from sqlalchemy import select
+        from prophet.db.models import Market, Position, OrderBookSnapshot
+        from sqlalchemy import func, select
 
         uptime = ""
         if self._start_time:
@@ -192,24 +192,27 @@ class TelegramNotifier:
             uptime = f"{hours}h {mins}m"
 
         async with get_session() as db:
-            # Last scan time
-            stmt = select(SystemState).where(SystemState.key == "last_full_scan")
-            result = await db.execute(stmt)
-            last_scan_row = result.scalar_one_or_none()
-            last_scan = last_scan_row.value if last_scan_row else "never"
+            active_markets = (await db.execute(
+                select(func.count()).select_from(Market).where(Market.status == "active")
+            )).scalar_one() or 0
 
-            # Last signal time
-            stmt2 = select(SystemState).where(SystemState.key == "last_signal_run")
-            result2 = await db.execute(stmt2)
-            last_signal_row = result2.scalar_one_or_none()
-            last_signal = last_signal_row.value if last_signal_row else "never"
+            open_positions = (await db.execute(
+                select(func.count()).select_from(Position).where(Position.status == "open")
+            )).scalar_one() or 0
+
+            # Last OB snapshot as proxy for "last data collection"
+            last_ob = (await db.execute(
+                select(func.max(OrderBookSnapshot.timestamp))
+            )).scalar_one_or_none()
+            last_data = str(last_ob)[:19] if last_ob else "never"
 
         await self._send(
             "<b>Engine Status</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
             f"Uptime: {uptime}\n"
-            f"Last scan: {last_scan}\n"
-            f"Last signal run: {last_signal}\n"
+            f"Active markets: {active_markets}\n"
+            f"Open positions: {open_positions}\n"
+            f"Last data: {last_data}\n"
             f"Bot: online"
         )
 
@@ -371,7 +374,7 @@ class TelegramNotifier:
     async def _cmd_markets(self) -> None:
         from prophet.db.database import get_session
         from prophet.db.models import Market
-        from sqlalchemy import func, select
+        from sqlalchemy import case, func, select
 
         async with get_session() as db:
             stmt = (
