@@ -374,19 +374,16 @@ class TelegramNotifier:
     async def _cmd_markets(self) -> None:
         from prophet.db.database import get_session
         from prophet.db.models import Market
-        from sqlalchemy import case, func, select
+        from sqlalchemy import func, select, text
 
         async with get_session() as db:
-            stmt = (
-                select(
-                    func.coalesce(Market.category, "unknown").label("cat"),
-                    func.count().label("total"),
-                    func.sum(case((Market.status == "active", 1), else_=0)).label("active"),
-                )
-                .group_by(func.coalesce(Market.category, "unknown"))
-                .order_by(func.count().desc())
-            )
-            rows = (await db.execute(stmt)).all()
+            result = await db.execute(text(
+                "SELECT coalesce(category, 'unknown') as cat, "
+                "count(*) as total, "
+                "sum(case when status = 'active' then 1 else 0 end) as active "
+                "FROM markets GROUP BY coalesce(category, 'unknown') ORDER BY count(*) DESC"
+            ))
+            rows = result.all()
 
             total = (await db.execute(
                 select(func.count()).select_from(Market)
@@ -394,7 +391,7 @@ class TelegramNotifier:
 
         lines = []
         for cat, cnt, active in rows:
-            lines.append(f"  {cat}: {cnt} ({active} active)")
+            lines.append(f"  {cat}: {cnt} ({active or 0} active)")
 
         await self._send(
             "<b>Markets by Category</b>\n"
