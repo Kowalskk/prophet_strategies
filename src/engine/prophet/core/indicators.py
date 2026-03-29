@@ -158,6 +158,12 @@ class MarketIndicators:
         # 9. EMA crossover (fast=5, slow=20)
         result["ema_crossover"] = _ema_crossover(price_values, fast=5, slow=20)
 
+        # 12. RSI (14-period)
+        result["rsi"] = _rsi(price_values, period=14)
+
+        # 13. VWAP (using depth as volume proxy)
+        result["vwap"] = _vwap(price_values, depths[:len(price_values)] if depths else [])
+
         # 10. Support/resistance
         result["support"], result["resistance"] = _support_resistance(price_values)
 
@@ -273,6 +279,40 @@ def _support_resistance(
     )
 
 
+def _rsi(prices: list[float], period: int = 14) -> float | None:
+    """RSI (Relative Strength Index). Range 0-100. >70 overbought, <30 oversold."""
+    if len(prices) < period + 1:
+        return None
+    gains = []
+    losses = []
+    for i in range(1, len(prices)):
+        delta = prices[i] - prices[i - 1]
+        gains.append(max(delta, 0))
+        losses.append(max(-delta, 0))
+
+    # Use last `period` deltas
+    recent_gains = gains[-period:]
+    recent_losses = losses[-period:]
+    avg_gain = sum(recent_gains) / period
+    avg_loss = sum(recent_losses) / period
+
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+
+def _vwap(prices: list[float], volumes: list[float]) -> float | None:
+    """Volume Weighted Average Price. Uses depth as volume proxy."""
+    if not prices or not volumes or len(prices) != len(volumes):
+        return None
+    total_pv = sum(p * v for p, v in zip(prices, volumes))
+    total_v = sum(volumes)
+    if total_v == 0:
+        return None
+    return round(total_pv / total_v, 6)
+
+
 def _time_decay(market: Any) -> float | None:
     """Time urgency factor: 0 = far from resolution, 1 = imminent.
 
@@ -305,41 +345,52 @@ def _time_decay(market: Any) -> float | None:
 def _composite_score(indicators: dict[str, Any]) -> float | None:
     """Combine indicators into a single score: -1 (bearish) to +1 (bullish).
 
-    Weights:
-    - momentum: 25%
-    - mean_reversion: 20%
-    - book_imbalance: 20%
-    - ema_crossover: 20%
-    - spread_trend: 15% (tightening spread = bullish)
+    Weights (inspired by polymarket-assistant-tool bias score):
+    - ema_crossover:   18%  (trend following)
+    - book_imbalance:  15%  (order flow)
+    - momentum:        15%  (price direction)
+    - rsi:             14%  (overbought/oversold)
+    - mean_reversion:  13%  (reversion signal)
+    - spread_trend:    13%  (liquidity direction)
+    - time_decay:      12%  (urgency)
     """
     components: list[tuple[float, float]] = []  # (value, weight)
-
-    momentum = indicators.get("price_momentum")
-    if momentum is not None:
-        # Clamp momentum to -0.1..+0.1, normalize to -1..+1
-        norm = max(-1, min(1, momentum * 10))
-        components.append((norm, 0.25))
-
-    mr = indicators.get("mean_reversion_score")
-    if mr is not None:
-        # Inverted: extreme positive = overbought = bearish for buying
-        components.append((-mr, 0.20))
-
-    imbalance = indicators.get("book_imbalance")
-    if imbalance is not None:
-        # >0.5 = more bids = bullish, normalize to -1..+1
-        components.append(((imbalance - 0.5) * 2, 0.20))
 
     ema = indicators.get("ema_crossover")
     if ema is not None:
         norm = max(-1, min(1, ema * 100))
-        components.append((norm, 0.20))
+        components.append((norm, 0.18))
+
+    imbalance = indicators.get("book_imbalance")
+    if imbalance is not None:
+        # >0.5 = more bids = bullish, normalize to -1..+1
+        components.append(((imbalance - 0.5) * 2, 0.15))
+
+    momentum = indicators.get("price_momentum")
+    if momentum is not None:
+        norm = max(-1, min(1, momentum * 10))
+        components.append((norm, 0.15))
+
+    rsi = indicators.get("rsi")
+    if rsi is not None:
+        # RSI: 50=neutral, <30=oversold(bullish), >70=overbought(bearish)
+        # Normalize: 0→+1, 50→0, 100→-1
+        norm = max(-1, min(1, (50 - rsi) / 50))
+        components.append((norm, 0.14))
+
+    mr = indicators.get("mean_reversion_score")
+    if mr is not None:
+        components.append((-mr, 0.13))
 
     spread = indicators.get("spread_trend")
     if spread is not None:
-        # Tightening (negative trend) = bullish
         norm = max(-1, min(1, -spread * 100))
-        components.append((norm, 0.15))
+        components.append((norm, 0.13))
+
+    td = indicators.get("time_decay_factor")
+    if td is not None:
+        # Higher time decay = more urgency = slight bullish bias for entry
+        components.append(((td - 0.5) * 2, 0.12))
 
     if not components:
         return None
