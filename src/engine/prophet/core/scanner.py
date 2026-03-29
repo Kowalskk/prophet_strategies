@@ -270,6 +270,49 @@ def _detect_category(pm: PolymarketMarket) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _filter_live_markets(
+    markets: list[PolymarketMarket],
+) -> list[PolymarketMarket]:
+    """Filter to only live, current markets with meaningful activity.
+
+    Rejects:
+    - Closed, resolved, or archived markets
+    - Markets with end_date in the past
+    - Markets with zero volume (dead/stale)
+    - Markets below minimum volume threshold
+    """
+    now = datetime.now(timezone.utc)
+    filtered = []
+
+    for pm in markets:
+        # Must be active and accepting orders
+        if not pm.active or pm.closed or pm.archived:
+            continue
+
+        # Must have some volume (filters out dead markets)
+        if pm.volume < MIN_VOLUME_USD:
+            continue
+
+        # End date must be in the future (if provided)
+        if pm.end_date_iso:
+            try:
+                end = datetime.fromisoformat(pm.end_date_iso.replace("Z", "+00:00"))
+                if end.tzinfo is None:
+                    end = end.replace(tzinfo=timezone.utc)
+                if end < now:
+                    continue
+            except (ValueError, TypeError):
+                pass  # no valid end date — allow through
+
+        filtered.append(pm)
+
+    logger.info(
+        "_filter_live_markets: %d → %d (removed %d stale/dead)",
+        len(markets), len(filtered), len(markets) - len(filtered),
+    )
+    return filtered
+
+
 class MarketScanner:
     """Discovers and tracks Polymarket markets across all categories."""
 
@@ -385,7 +428,9 @@ class MarketScanner:
         raw_markets = await self._gamma.search_markets(
             tag=tag, active=True, archived=False, limit=min(limit, 100)
         )
-        return await self._process_markets(raw_markets, force_category=category)
+        # Filter: only live markets with volume and future end dates
+        filtered = _filter_live_markets(raw_markets)
+        return await self._process_markets(filtered, force_category=category)
 
     # ------------------------------------------------------------------
     # Market processing
@@ -427,10 +472,11 @@ class MarketScanner:
                     stats["skipped"] += 1
                     continue
 
-            # For non-crypto: skip very low liquidity markets
-            if category != "crypto" and pm.liquidity < MIN_LIQUIDITY_USD:
-                stats["skipped"] += 1
-                continue
+            # For non-crypto: require minimum volume AND liquidity
+            if category != "crypto":
+                if pm.volume < MIN_VOLUME_USD or pm.liquidity < MIN_LIQUIDITY_USD:
+                    stats["skipped"] += 1
+                    continue
 
             # Check if already exists
             existing = await self._get_market_by_condition_id(condition_id)
