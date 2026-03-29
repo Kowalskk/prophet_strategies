@@ -50,11 +50,11 @@ logger = logging.getLogger(__name__)
 
 SCAN_CATEGORIES: dict[str, list[str]] = {
     "crypto": ["crypto"],
-    "sports": ["sports", "nba", "nfl", "mlb", "soccer", "mma"],
-    "politics": ["politics", "elections"],
-    "entertainment": ["entertainment", "pop-culture", "media"],
-    "science": ["science", "climate", "weather", "temperature"],
-    "economics": ["economics", "fed", "macro"],
+    "sports": ["Sports", "NBA", "NFL", "MLB", "Soccer", "MMA", "UFC", "Tennis"],
+    "politics": ["Politics", "Elections", "Congress"],
+    "entertainment": ["Entertainment", "Pop Culture", "Media"],
+    "science": ["Science", "Climate", "Weather"],
+    "economics": ["Economics", "Fed", "Macro"],
 }
 
 # Strategy assignments per category (based on Becker 2026 research)
@@ -424,12 +424,33 @@ class MarketScanner:
     async def _scan_by_tag(
         self, tag: str, category: str, limit: int = 200
     ) -> dict[str, int]:
-        """Scan Gamma API for markets with a specific tag."""
-        raw_markets = await self._gamma.search_markets(
-            tag=tag, active=True, archived=False, limit=min(limit, 100)
+        """Scan Gamma API events endpoint for markets with a specific tag.
+
+        Uses the /events endpoint (not /markets) because the events endpoint
+        returns current, well-categorized markets. Markets from events are
+        then filtered for liveness, volume, and future end dates.
+        """
+        raw_events = await self._gamma.get_events(
+            tag=tag, active=True, limit=min(limit, 100)
         )
+
+        # Extract markets from events
+        raw_markets: list[PolymarketMarket] = []
+        for event in raw_events:
+            for raw_market in event.get("markets", []):
+                if isinstance(raw_market, dict):
+                    try:
+                        from prophet.polymarket.gamma_client import _parse_gamma_market
+                        raw_markets.append(_parse_gamma_market(raw_market))
+                    except Exception:
+                        continue
+
         # Filter: only live markets with volume and future end dates
         filtered = _filter_live_markets(raw_markets)
+        logger.info(
+            "_scan_by_tag(%s, %s): %d events → %d markets → %d after filter",
+            tag, category, len(raw_events), len(raw_markets), len(filtered),
+        )
         return await self._process_markets(filtered, force_category=category)
 
     # ------------------------------------------------------------------
