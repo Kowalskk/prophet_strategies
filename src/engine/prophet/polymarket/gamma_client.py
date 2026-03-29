@@ -304,8 +304,11 @@ class GammaClient:
         *,
         tag: str | None = None,
         active: bool | None = True,
+        closed: bool | None = None,
         limit: int = _PAGE_SIZE,
         offset: int = 0,
+        order: str = "volume",
+        ascending: bool = False,
     ) -> list[dict[str, Any]]:
         """Fetch event groups from the Gamma API.
 
@@ -319,17 +322,30 @@ class GammaClient:
             Filter events by tag (e.g. ``"crypto"``).
         active:
             If True, return only active events.
+        closed:
+            If False, exclude closed events.
         limit:
             Page size.
         offset:
             Pagination offset.
+        order:
+            Sort field (default: volume).
+        ascending:
+            Sort direction (default: False = highest first).
         """
         http = self._ensure_started()
-        params: dict[str, Any] = {"limit": min(limit, _PAGE_SIZE), "offset": offset}
+        params: dict[str, Any] = {
+            "limit": min(limit, _PAGE_SIZE),
+            "offset": offset,
+            "order": order,
+            "ascending": str(ascending).lower(),
+        }
         if tag:
             params["tag"] = tag
         if active is not None:
             params["active"] = str(active).lower()
+        if closed is not None:
+            params["closed"] = str(closed).lower()
 
         data = await _gamma_request(http, "/events", params)
         raw_list: list[dict[str, Any]] = data if isinstance(data, list) else data.get("data", [])

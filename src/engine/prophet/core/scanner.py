@@ -375,10 +375,10 @@ class MarketScanner:
         crypto_stats = await self._scan_crypto_slugs()
         _merge_stats(stats, crypto_stats)
 
-        # Quick scan of high-priority categories
-        for tag in ["sports", "politics"]:
+        # Quick scan of high-priority categories (tag=API tag, category=internal key)
+        for tag, category in [("Sports", "sports"), ("Politics", "politics")]:
             try:
-                tag_stats = await self._scan_by_tag(tag, tag, limit=50)
+                tag_stats = await self._scan_by_tag(tag, category, limit=50)
                 _merge_stats(stats, tag_stats)
             except Exception as exc:
                 logger.debug("quick_scan: tag=%s failed: %s", tag, exc)
@@ -439,7 +439,8 @@ class MarketScanner:
         then filtered for liveness, volume, and future end dates.
         """
         raw_events = await self._gamma.get_events(
-            tag=tag, active=True, limit=min(limit, 100)
+            tag=tag, active=True, closed=False,
+            limit=min(limit, 100), order="volume", ascending=False,
         )
 
         # Extract markets from events, inheriting event-level fields
