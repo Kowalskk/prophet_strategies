@@ -106,6 +106,14 @@ CATEGORY_SIZE_MULTIPLIER: dict[str, float] = {
 MIN_VOLUME_USD = 1000.0
 MIN_LIQUIDITY_USD = 100.0
 
+
+def _safe_float(val: Any) -> float:
+    """Convert a value to float, returning 0.0 on failure."""
+    try:
+        return float(val) if val else 0.0
+    except (ValueError, TypeError):
+        return 0.0
+
 # ---------------------------------------------------------------------------
 # Crypto-specific parsing (kept from original scanner)
 # ---------------------------------------------------------------------------
@@ -434,13 +442,20 @@ class MarketScanner:
             tag=tag, active=True, limit=min(limit, 100)
         )
 
-        # Extract markets from events
+        # Extract markets from events, inheriting event-level fields
         raw_markets: list[PolymarketMarket] = []
+        from prophet.polymarket.gamma_client import _parse_gamma_market
         for event in raw_events:
+            event_volume = _safe_float(event.get("volume") or event.get("competitionVolume"))
+            event_end_date = event.get("endDate") or event.get("endDateIso")
             for raw_market in event.get("markets", []):
                 if isinstance(raw_market, dict):
                     try:
-                        from prophet.polymarket.gamma_client import _parse_gamma_market
+                        # Inherit event-level volume/endDate if market lacks them
+                        if not raw_market.get("volume") and event_volume:
+                            raw_market["volume"] = event_volume
+                        if not raw_market.get("endDateIso") and not raw_market.get("endDate") and event_end_date:
+                            raw_market["endDateIso"] = event_end_date
                         raw_markets.append(_parse_gamma_market(raw_market))
                     except Exception:
                         continue
