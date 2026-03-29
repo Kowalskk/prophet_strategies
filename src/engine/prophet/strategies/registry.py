@@ -112,6 +112,11 @@ def _register_builtins() -> None:
     from prophet.strategies import liquidity_sniper as _ls  # noqa: F401
     from prophet.strategies import volatility_spread_variants as _vsv  # noqa: F401
     from prophet.strategies import spot_relative_bid as _srb  # noqa: F401
+    from prophet.strategies import reversal_strategy as _rev  # noqa: F401
+    from prophet.strategies import dca_strategy as _dca  # noqa: F401
+    from prophet.strategies import ladder_mm_strategy as _lmm  # noqa: F401
+    from prophet.strategies import auto_hedge_strategy as _ah  # noqa: F401
+    from prophet.strategies import pre_window_strategy as _pw  # noqa: F401
 
     from prophet.strategies.volatility_spread import VolatilitySpreadStrategy
     from prophet.strategies.stink_bid import StinkBidStrategy
@@ -120,6 +125,33 @@ def _register_builtins() -> None:
         VolatilitySpreadX3, VolatilitySpreadX4, VolatilitySpreadX5,
     )
     from prophet.strategies.spot_relative_bid import ALL_SRB_CLASSES
+    from prophet.strategies.reversal_strategy import (
+        ReversalStrategy,
+        ReversalAggressiveStrategy,
+        ReversalDeepStrategy,
+        ReversalScalpStrategy,
+    )
+    from prophet.strategies.dca_strategy import (
+        DCAStrategy,
+        DCAConservativeStrategy,
+        DCAAggressiveStrategy,
+        DCASportsStrategy,
+    )
+    from prophet.strategies.ladder_mm_strategy import (
+        LadderMMStrategy,
+        LadderMMWideStrategy,
+        LadderMMTightStrategy,
+    )
+    from prophet.strategies.auto_hedge_strategy import (
+        AutoHedgeStrategy,
+        AutoHedgeAggressiveStrategy,
+        AutoHedgeSniperStrategy,
+    )
+    from prophet.strategies.pre_window_strategy import (
+        PreWindowStrategy,
+        PreWindowEarlyStrategy,
+        PreWindowLateStrategy,
+    )
 
     for cls in [
         VolatilitySpreadStrategy,
@@ -129,6 +161,23 @@ def _register_builtins() -> None:
         VolatilitySpreadX4,
         VolatilitySpreadX5,
         *ALL_SRB_CLASSES,
+        ReversalStrategy,
+        ReversalAggressiveStrategy,
+        ReversalDeepStrategy,
+        ReversalScalpStrategy,
+        DCAStrategy,
+        DCAConservativeStrategy,
+        DCAAggressiveStrategy,
+        DCASportsStrategy,
+        LadderMMStrategy,
+        LadderMMWideStrategy,
+        LadderMMTightStrategy,
+        AutoHedgeStrategy,
+        AutoHedgeAggressiveStrategy,
+        AutoHedgeSniperStrategy,
+        PreWindowStrategy,
+        PreWindowEarlyStrategy,
+        PreWindowLateStrategy,
     ]:
         if cls.name not in STRATEGY_REGISTRY:
             STRATEGY_REGISTRY[cls.name] = cls
