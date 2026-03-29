@@ -112,12 +112,34 @@ async def _lifespan(app: FastAPI):
         )
         app.state.scheduler = None
 
+    # Start WebSocket price listener (best-effort; non-fatal if it fails)
+    try:
+        from prophet.core.ws_listener import PolymarketWSListener
+
+        ws_listener = PolymarketWSListener()
+        await ws_listener.start()
+        app.state.ws_listener = ws_listener
+        logger.info("PolymarketWSListener started.")
+    except Exception as exc:
+        logger.warning(
+            "PolymarketWSListener could not start (non-fatal — API still available): %s", exc
+        )
+        app.state.ws_listener = None
+
     logger.info("Prophet Engine ready.")
 
     yield  # ---- application is running ----
 
     # ---- SHUTDOWN ----
     logger.info("Prophet Engine shutting down…")
+
+    ws_listener = getattr(app.state, "ws_listener", None)
+    if ws_listener is not None:
+        try:
+            await ws_listener.stop()
+            logger.info("PolymarketWSListener stopped.")
+        except Exception as exc:
+            logger.warning("Error stopping PolymarketWSListener: %s", exc)
 
     scheduler = getattr(app.state, "scheduler", None)
     if scheduler is not None:
