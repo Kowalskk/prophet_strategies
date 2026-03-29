@@ -42,8 +42,9 @@ class LiquiditySniperStrategy(StrategyBase):
     default_params: dict[str, Any] = {
         "min_gap_pct": 3.0,           # combined must be < (1 - 0.03) = 0.97
         "max_position_size": 100.0,   # USD per signal
-        "exit_timeout_hours": 24,     # close position after 24h if not profitable
+        "exit_timeout_hours": 168,    # 7 days — wait for market resolution
         "min_book_depth": 50.0,       # minimum USD depth on each side to act
+        "enable_thin_book": False,    # disable speculative thin-book signals
     }
 
     async def evaluate(
@@ -122,6 +123,9 @@ class LiquiditySniperStrategy(StrategyBase):
         # ----------------------------------------------------------------
         # Case 2: Single-side thin book — gap price on the thin side
         # ----------------------------------------------------------------
+        if not p.get("enable_thin_book", False):
+            return signals
+
         for side, ask, depth, other_ask in [
             ("YES", yes_ask, yes_depth, no_ask),
             ("NO", no_ask, no_depth, yes_ask),
@@ -175,6 +179,7 @@ class LiquiditySniperStrategy(StrategyBase):
         p["max_position_size"] = float(p["max_position_size"])
         p["exit_timeout_hours"] = int(p["exit_timeout_hours"])
         p["min_book_depth"] = float(p["min_book_depth"])
+        p["enable_thin_book"] = bool(p.get("enable_thin_book", False))
 
         if p["min_gap_pct"] <= 0:
             raise ValueError(f"min_gap_pct must be positive, got {p['min_gap_pct']}")
