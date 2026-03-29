@@ -425,6 +425,25 @@ class OrderManager:
             position.id, position.strategy, position.side,
             position.entry_price, exit_price, net_pnl, exit_reason,
         )
+
+        # Telegram notification (fire-and-forget)
+        try:
+            from prophet.core.telegram_bot import notifier
+            if notifier.enabled:
+                market_question = getattr(position, "_market_question", f"Market #{position.market_id}")
+                import asyncio
+                asyncio.ensure_future(notifier.notify_trade_closed(
+                    strategy=position.strategy,
+                    market_question=market_question,
+                    side=position.side,
+                    entry_price=position.entry_price,
+                    exit_price=exit_price,
+                    net_pnl=net_pnl,
+                    exit_reason=exit_reason,
+                ))
+        except Exception:
+            pass  # never let notifications break trading
+
         return True
 
     # ------------------------------------------------------------------

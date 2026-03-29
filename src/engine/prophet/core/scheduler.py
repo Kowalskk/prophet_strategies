@@ -224,6 +224,22 @@ class Scheduler:
             misfire_grace_time=180,
         )
 
+        # ── Telegram Daily Summary ────────────────────────────────────
+        # Every day at 20:00 UTC
+        async def _daily_summary() -> None:
+            from prophet.core.telegram_bot import notifier
+            if notifier.enabled:
+                await notifier.build_and_send_daily_summary()
+
+        s.add_job(
+            self._safe_run("telegram.daily_summary", _daily_summary),
+            trigger=CronTrigger(hour=20, minute=0),
+            id="telegram_daily_summary",
+            name="Telegram — daily summary",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
         logger.debug(
             "Registered %d scheduler jobs", len(s.get_jobs())
         )

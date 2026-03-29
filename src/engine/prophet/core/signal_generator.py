@@ -199,6 +199,32 @@ class SignalGenerator:
             )
             return None
 
+        # LLM pre-trade filter (optional, non-blocking on errors)
+        try:
+            from prophet.core.llm_filter import llm_filter
+            if llm_filter.enabled:
+                from prophet.db.models import Market
+                mkt_stmt = select(Market.question).where(Market.id == signal.market_id)
+                mkt_result = await self._db.execute(mkt_stmt)
+                question = mkt_result.scalar_one_or_none() or f"Market #{signal.market_id}"
+
+                llm_ok, llm_reason = await llm_filter.evaluate(
+                    market_question=question,
+                    strategy_name=signal.strategy,
+                    side=signal.side,
+                    target_price=signal.target_price,
+                    size_usd=signal.size_usd,
+                )
+                if not llm_ok:
+                    logger.info(
+                        "Signal REJECTED by LLM filter: market_id=%d %s %s@%.4f — %s",
+                        signal.market_id, signal.strategy, signal.side,
+                        signal.target_price, llm_reason,
+                    )
+                    return None
+        except Exception as exc:
+            logger.debug("LLM filter skipped: %s", exc)
+
         # Persist signal
         try:
             db_signal = Signal(

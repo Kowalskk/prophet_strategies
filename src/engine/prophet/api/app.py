@@ -112,6 +112,28 @@ async def _lifespan(app: FastAPI):
         )
         app.state.scheduler = None
 
+    # Start Telegram notifier (best-effort; non-fatal if not configured)
+    try:
+        from prophet.core.telegram_bot import notifier as tg_notifier
+        await tg_notifier.start()
+        app.state.telegram = tg_notifier
+        if tg_notifier.enabled:
+            await tg_notifier._send("🚀 <b>Prophet Engine started</b>")
+            logger.info("TelegramNotifier started.")
+    except Exception as exc:
+        logger.warning("TelegramNotifier could not start: %s", exc)
+        app.state.telegram = None
+
+    # Start LLM filter (best-effort)
+    try:
+        from prophet.core.llm_filter import llm_filter
+        await llm_filter.start()
+        app.state.llm_filter = llm_filter
+        if llm_filter.enabled:
+            logger.info("LLM pre-trade filter started.")
+    except Exception as exc:
+        logger.warning("LLM filter could not start: %s", exc)
+
     # Start WebSocket price listener (best-effort; non-fatal if it fails)
     try:
         from prophet.core.ws_listener import PolymarketWSListener
@@ -132,6 +154,24 @@ async def _lifespan(app: FastAPI):
 
     # ---- SHUTDOWN ----
     logger.info("Prophet Engine shutting down…")
+
+    # Stop Telegram notifier
+    tg = getattr(app.state, "telegram", None)
+    if tg is not None:
+        try:
+            if tg.enabled:
+                await tg._send("🛑 <b>Prophet Engine shutting down</b>")
+            await tg.stop()
+        except Exception:
+            pass
+
+    # Stop LLM filter
+    llm = getattr(app.state, "llm_filter", None)
+    if llm is not None:
+        try:
+            await llm.stop()
+        except Exception:
+            pass
 
     ws_listener = getattr(app.state, "ws_listener", None)
     if ws_listener is not None:
