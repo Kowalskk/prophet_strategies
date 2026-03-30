@@ -131,15 +131,15 @@ class Scheduler:
             misfire_grace_time=3600,  # allow up to 1h late start
         )
 
-        # Quick scan: every 15 minutes, runs immediately on startup
-        import datetime as _dt
+        # Quick scan: every 15 minutes, first run fires immediately via next_run_time
         s.add_job(
             self._safe_run("scanner.quick_scan", self._scanner.quick_scan),
-            trigger=IntervalTrigger(minutes=15, start_date=_dt.datetime.now(_dt.timezone.utc)),
+            trigger=IntervalTrigger(minutes=15),
             id="scanner_quick",
             name="MarketScanner — quick scan",
             replace_existing=True,
             misfire_grace_time=300,
+            next_run_time=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
         )
 
         # ── Data Collector ────────────────────────────────────────────

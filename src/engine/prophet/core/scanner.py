@@ -502,8 +502,12 @@ class MarketScanner:
                 stats["skipped"] += 1
                 continue
 
-            # Detect category
-            category = force_category or _detect_category(pm)
+            # Detect category: always use question/tag detection except for
+            # crypto (force_category='crypto' is reliable from slug-based scan)
+            if force_category == "crypto":
+                category = "crypto"
+            else:
+                category = _detect_category(pm)
 
             # For crypto markets, parse the question for structured data
             parsed = {"crypto": None, "threshold": None, "direction": None, "resolution_date": None}
@@ -558,9 +562,11 @@ class MarketScanner:
                 if pm.volume:
                     existing.volume_usd = pm.volume
 
-                # Update category if missing
-                if existing.category is None and category:
+                # Always trust _detect_category result — it uses keyword detection
+                # and is more reliable than the force_category from tag-based scans.
+                if existing.category != category:
                     existing.category = category
+                    stats["updated"] += 1
 
                 # Backfill resolution_date if missing and we have end_date_iso
                 if existing.resolution_date is None and pm.end_date_iso:
