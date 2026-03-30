@@ -94,47 +94,60 @@ class SignalGenerator:
     # ------------------------------------------------------------------
 
     async def run(self) -> list[Any]:
-        """Run one signal generation cycle.
+        """Run one signal generation cycle with a fresh DB session per run.
 
         Returns
         -------
         list
             Newly created :class:`~prophet.db.models.Signal` ORM rows.
         """
-        from prophet.db.models import Market, StrategyConfig
+        from prophet.db.models import Market
+        from prophet.db.database import get_session_factory
+        from prophet.core.risk_manager import RiskManager
 
-        # Fetch all active markets
-        stmt = select(Market).where(Market.status == "active")
-        result = await self._db.execute(stmt)
-        markets = list(result.scalars().all())
-
-        if not markets:
-            logger.debug("SignalGenerator: no active markets")
-            return []
-
-        logger.info("SignalGenerator: evaluating %d active markets", len(markets))
-
-        new_signals: list[Any] = []
-
-        for market in markets:
+        sf = get_session_factory()
+        async with sf() as session:
+            # Replace the shared session with a fresh one for this run
+            old_db = self._db
+            old_risk_db = self._risk._db if hasattr(self._risk, "_db") else None
+            self._db = session
+            if old_risk_db is not None:
+                self._risk._db = session
             try:
-                market_signals = await self._evaluate_market(market)
-                new_signals.extend(market_signals)
-            except Exception as exc:
-                logger.error(
-                    "SignalGenerator: error evaluating market_id=%d: %s",
-                    market.id, exc,
-                )
+                stmt = select(Market).where(Market.status == "active")
+                result = await session.execute(stmt)
+                markets = list(result.scalars().all())
 
-        logger.info(
-            "SignalGenerator: cycle complete — %d new signal(s)", len(new_signals)
-        )
-        try:
-            await self._db.commit()
-        except Exception as exc:
-            logger.error("SignalGenerator: commit failed: %s", exc)
-            await self._db.rollback()
-        return new_signals
+                if not markets:
+                    logger.debug("SignalGenerator: no active markets")
+                    return []
+
+                logger.info("SignalGenerator: evaluating %d active markets", len(markets))
+                new_signals: list[Any] = []
+
+                for market in markets:
+                    try:
+                        market_signals = await self._evaluate_market(market)
+                        new_signals.extend(market_signals)
+                    except Exception as exc:
+                        logger.error(
+                            "SignalGenerator: error evaluating market_id=%d: %s",
+                            market.id, exc,
+                        )
+
+                logger.info(
+                    "SignalGenerator: cycle complete — %d new signal(s)", len(new_signals)
+                )
+                try:
+                    await session.commit()
+                except Exception as exc:
+                    logger.error("SignalGenerator: commit failed: %s", exc)
+                    await session.rollback()
+                return new_signals
+            finally:
+                self._db = old_db
+                if old_risk_db is not None:
+                    self._risk._db = old_risk_db
 
     # ------------------------------------------------------------------
     # Internal
