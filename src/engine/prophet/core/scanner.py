@@ -379,8 +379,12 @@ class MarketScanner:
         stats = {"new": 0, "updated": 0, "skipped": 0}
 
         # Crypto slugs (original fast method)
-        crypto_stats = await self._scan_crypto_slugs()
-        _merge_stats(stats, crypto_stats)
+        try:
+            crypto_stats = await self._scan_crypto_slugs()
+            _merge_stats(stats, crypto_stats)
+        except Exception as exc:
+            logger.warning("quick_scan: crypto slug scan failed: %s — rolling back and continuing", exc)
+            await self._db.rollback()
 
         # Quick scan of high-priority categories (tag=API tag, category=internal key)
         for tag, category in [("Sports", "sports"), ("Politics", "politics")]:
@@ -420,7 +424,7 @@ class MarketScanner:
             9: "september", 10: "october", 11: "november", 12: "december",
         }
         today = date.today()
-        for delta in range(0, 8):
+        for delta in range(-3, 8):  # 3 days back + 7 days forward to catch recent resolutions
             target_date = today + timedelta(days=delta)
             month_name = _MONTH_SLUG[target_date.month]
             for crypto in settings.target_cryptos:
@@ -534,7 +538,9 @@ class MarketScanner:
                     stats["skipped"] += 1
                     continue
 
-            # Check if already exists
+            # Check if already exists — expire_all ensures we see committed DB state
+            await self._db.flush()
+            self._db.expire_all()
             existing = await self._get_market_by_condition_id(condition_id)
 
             if existing is None:
@@ -658,19 +664,24 @@ class MarketScanner:
     # ------------------------------------------------------------------
 
     async def _check_resolution_for_open_positions(self) -> None:
-        """Check Gamma resolution only for markets that have open positions.
+        """Check resolution for markets with open positions.
 
-        This replaces the old _update_resolved_markets which queried ALL active
-        markets (873+ HTTP calls). We only care about resolution when money is
-        at stake — i.e., markets with open paper positions.
+        For crypto markets, resolution is detected during slug scans (range now
+        includes 3 days back).  This method handles non-crypto markets by querying
+        the Gamma events endpoint for recently-closed events and checking if any
+        of our position markets appear among them.
         """
         from prophet.db.models import Market, Position
 
-        # Find distinct market_ids with open positions
+        # Find non-crypto markets with open positions
         stmt = (
             select(Market)
             .join(Position, Position.market_id == Market.id)
-            .where(Position.status == "open", Market.status == "active")
+            .where(
+                Position.status == "open",
+                Market.status == "active",
+                Market.category != "crypto",
+            )
             .distinct()
         )
         result = await self._db.execute(stmt)
@@ -679,41 +690,54 @@ class MarketScanner:
         if not markets_with_positions:
             return
 
+        # Build lookup by condition_id
+        market_lookup: dict[str, Any] = {m.condition_id: m for m in markets_with_positions}
+
         logger.debug(
-            "Checking resolution for %d markets with open positions",
+            "Checking resolution for %d non-crypto markets with open positions",
             len(markets_with_positions),
         )
 
-        for market in markets_with_positions:
+        # Fetch recently-closed events from Gamma (closed=True returns resolved events)
+        resolved_count = 0
+        for tag in ["Sports", "Politics", "Entertainment"]:
             try:
-                resolution = await self._gamma.get_market_resolution(market.condition_id)
-                if resolution["resolved"] and resolution["outcome"]:
-                    market.status = "resolved"
-                    market.resolved_outcome = str(resolution["outcome"]).upper()
-                    if resolution["resolution_time"]:
-                        try:
-                            market.resolution_time = datetime.fromisoformat(
-                                str(resolution["resolution_time"]).replace("Z", "+00:00")
-                            )
-                        except ValueError:
-                            market.resolution_time = datetime.now(timezone.utc)
-                    else:
-                        market.resolution_time = datetime.now(timezone.utc)
-                    logger.info(
-                        "Resolution confirmed: market_id=%d %s -> %s",
-                        market.id, market.condition_id[:12], market.resolved_outcome,
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Could not check resolution for market %s: %s",
-                    market.condition_id[:12], exc,
+                events = await self._gamma.get_events(
+                    tag=tag, active=False, closed=True, limit=50,
+                    order="endDate", ascending=False,
                 )
+                from prophet.polymarket.gamma_client import _parse_gamma_market
+                for event in events:
+                    for raw_market in event.get("markets", []):
+                        if not isinstance(raw_market, dict):
+                            continue
+                        cid = (
+                            raw_market.get("conditionId")
+                            or raw_market.get("condition_id")
+                            or ""
+                        )
+                        if not cid or cid not in market_lookup:
+                            continue
+                        pm = _parse_gamma_market(raw_market)
+                        if pm.resolved and pm.outcome:
+                            market = market_lookup[cid]
+                            market.status = "resolved"
+                            market.resolved_outcome = str(pm.outcome).upper()
+                            market.resolution_time = datetime.now(timezone.utc)
+                            resolved_count += 1
+                            logger.info(
+                                "Resolution confirmed (tag=%s): market_id=%d %s -> %s",
+                                tag, market.id, cid[:12], market.resolved_outcome,
+                            )
+            except Exception as exc:
+                logger.debug("_check_resolution tag=%s failed: %s", tag, exc)
 
-        try:
-            await self._db.flush()
-        except Exception as exc:
-            logger.error("DB flush failed during resolution check: %s", exc)
-            raise
+        if resolved_count:
+            try:
+                await self._db.flush()
+            except Exception as exc:
+                logger.error("DB flush failed during resolution check: %s", exc)
+                raise
 
     async def _get_market_by_condition_id(self, condition_id: str) -> Any | None:
         from prophet.db.models import Market

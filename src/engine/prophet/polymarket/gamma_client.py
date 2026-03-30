@@ -259,19 +259,26 @@ class GammaClient:
     async def get_market(self, condition_id: str) -> PolymarketMarket | None:
         """Fetch a single market by its condition ID.
 
-        Returns None if the market is not found (404).
+        Returns None if the market is not found.
         """
         http = self._ensure_started()
+        # Gamma's /markets/{id} expects a numeric ID, not a condition_id.
+        # Use query param instead: /markets?conditionId=0x...
         try:
-            data = await _gamma_request(http, f"/markets/{condition_id}")
+            data = await _gamma_request(http, "/markets", params={"conditionId": condition_id})
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
+            if exc.response.status_code in (404, 422):
                 logger.debug("Market not found in Gamma: %s", condition_id)
                 return None
             raise
 
-        if isinstance(data, list) and data:
-            return _parse_gamma_market(data[0])
+        if isinstance(data, list):
+            # Find the exact match by conditionId
+            for item in data:
+                cid = item.get("conditionId") or item.get("condition_id") or item.get("id") or ""
+                if cid.lower() == condition_id.lower():
+                    return _parse_gamma_market(item)
+            return None
         if isinstance(data, dict) and data:
             return _parse_gamma_market(data)
         return None
