@@ -64,32 +64,39 @@ CATEGORY_STRATEGIES: dict[str, list[str]] = {
         "srb_mid_res", "srb_mid_x3", "srb_mid_x5",
         "srb_high_res", "srb_high_x2", "srb_high_x4",
         "volatility_spread", "vs_x3", "vs_x4", "vs_x5",
-        "liquidity_sniper",
     ],
     "sports": [
         "srb_generic_res", "srb_generic_x5", "srb_generic_x10",
+        "volatility_spread",
         "dca", "dca_sports",
         "reversal", "reversal_aggressive",
     ],
     "politics": [
         "srb_generic_res", "srb_generic_x5",
+        "volatility_spread",
         "pre_window", "pre_window_early", "pre_window_late",
         "dca", "dca_conservative",
         "political_favourite", "political_favourite_aggr", "political_favourite_cons",
     ],
     "entertainment": [
         "srb_generic_res", "srb_generic_x5", "srb_generic_x10",
+        "volatility_spread",
         "ladder_mm", "ladder_mm_wide",
         "auto_hedge",
     ],
     "science": [
         "srb_generic_res", "srb_generic_x5",
+        "volatility_spread",
         "weather_fade", "weather_fade_aggr", "weather_fade_cons",
     ],
     "default": [
         "srb_generic_res", "srb_generic_x5",
+        "volatility_spread",
     ],
 }
+
+# Minimum volume for high-quality strategies (stink_bid + volatility_spread)
+MIN_VOLUME_HIGH_QUALITY = 30_000.0
 
 # Size multiplier per category (research: Sports has 2.23% gap vs Finance 0.17%)
 CATEGORY_SIZE_MULTIPLIER: dict[str, float] = {
@@ -538,14 +545,19 @@ class MarketScanner:
                     token_id_yes=token_yes,
                     token_id_no=token_no,
                     status="active",
+                    volume_usd=pm.volume or 0.0,
                 )
                 self._db.add(market)
                 stats["new"] += 1
                 logger.info(
-                    "New market [%s]: %s | %s",
-                    category, condition_id[:12], pm.question[:60],
+                    "New market [%s]: %s | %s (vol=$%.0f)",
+                    category, condition_id[:12], pm.question[:60], pm.volume or 0,
                 )
             else:
+                # Always update volume (it grows over time)
+                if pm.volume:
+                    existing.volume_usd = pm.volume
+
                 # Update category if missing
                 if existing.category is None and category:
                     existing.category = category

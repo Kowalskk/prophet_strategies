@@ -110,6 +110,10 @@ class Market(Base):
         String(255), nullable=False,
         comment="CLOB token ID for the NO outcome.",
     )
+    volume_usd: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0,
+        comment="Total traded volume in USD from Gamma API.",
+    )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="active", index=True,
         comment="Market lifecycle: active | resolved | expired.",

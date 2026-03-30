@@ -29,7 +29,16 @@ from prophet.polymarket.orderbook import OrderBookService
 from prophet.polymarket.price_feeds import PriceFeedService
 from prophet.strategies.base import TradeSignal
 from prophet.strategies.registry import get_strategy, STRATEGY_REGISTRY
-from prophet.core.scanner import CATEGORY_STRATEGIES, CATEGORY_SIZE_MULTIPLIER
+from prophet.core.scanner import CATEGORY_STRATEGIES, CATEGORY_SIZE_MULTIPLIER, MIN_VOLUME_HIGH_QUALITY
+
+# Strategies that require a minimum volume threshold
+_HIGH_QUALITY_STRATEGIES = frozenset({
+    "srb_cheap_res", "srb_cheap_x5", "srb_cheap_x10",
+    "srb_mid_res", "srb_mid_x3", "srb_mid_x5",
+    "srb_high_res", "srb_high_x2", "srb_high_x4",
+    "srb_generic_res", "srb_generic_x5", "srb_generic_x10",
+    "volatility_spread", "vs_x3", "vs_x4", "vs_x5",
+})
 
 if TYPE_CHECKING:
     from prophet.core.risk_manager import RiskManager
@@ -225,11 +234,22 @@ class SignalGenerator:
         allowed = set(CATEGORY_STRATEGIES.get(category, CATEGORY_STRATEGIES["default"]))
         size_mult = CATEGORY_SIZE_MULTIPLIER.get(category, CATEGORY_SIZE_MULTIPLIER["default"])
 
+        market_volume = getattr(market, "volume_usd", 0.0) or 0.0
+
         for config in strategy_configs:
             if not config.enabled:
                 continue
 
             strategy_name = config.strategy
+
+            # Volume filter: stink_bid and volatility_spread require >30k volume
+            if strategy_name in _HIGH_QUALITY_STRATEGIES and market_volume < MIN_VOLUME_HIGH_QUALITY:
+                logger.debug(
+                    "Skipping %s on market_id=%d: volume=$%.0f < $%.0f",
+                    strategy_name, market.id, market_volume, MIN_VOLUME_HIGH_QUALITY,
+                )
+                continue
+
             if strategy_name not in allowed:
                 continue
             if strategy_name not in STRATEGY_REGISTRY:

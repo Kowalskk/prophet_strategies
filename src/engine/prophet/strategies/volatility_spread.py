@@ -45,7 +45,7 @@ class VolatilitySpreadStrategy(StrategyBase):
     )
     default_params: dict[str, Any] = {
         "spread_percent": 5.0,      # % below mid price to place orders
-        "entry_price_max": 0.05,    # max price per share (skip if mid - spread > this)
+        "entry_price_max": 0.45,    # max price per share — allows markets up to ~55/45 split
         "capital_per_side": 50.0,   # USD per YES order and per NO order
         "exit_strategy": "sell_at_target",
         "sell_target_pct": 100.0,   # sell when price doubles (100% gain)
