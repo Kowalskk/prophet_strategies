@@ -183,10 +183,12 @@ class Scheduler:
         )
 
         # ── Signal Generator ──────────────────────────────────────────
-        # Every 15 minutes
+        # Every 15 minutes, offset by 3 min so it doesn't collide with scanner
+        import datetime as _dt
+        _sig_start = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(minutes=3)
         s.add_job(
             self._safe_run("signal_generator.run", self._signal_generator.run),
-            trigger=IntervalTrigger(minutes=15),
+            trigger=IntervalTrigger(minutes=15, start_date=_sig_start),
             id="signal_generation",
             name="SignalGenerator — evaluate markets",
             replace_existing=True,
