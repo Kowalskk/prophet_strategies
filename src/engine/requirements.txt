@@ -15,5 +15,6 @@ python-dotenv==1.1.*
 pytest==8.*
 pytest-asyncio==0.25.*
 pytest-cov==6.*
+aiosqlite==0.20.*
 ruff==0.9.*
 mypy==1.14.*

@@ -169,7 +169,7 @@ class OrderBookSnapshot(Base):
     __tablename__ = "orderbook_snapshots"
     __table_args__ = (
         Index("ix_obs_market_token_ts", "market_id", "token_id", "timestamp"),
-        Index("ix_obs_timestamp", "timestamp"),
+        # timestamp index auto-created by index=True on column
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -232,7 +232,6 @@ class ObservedTrade(Base):
     __tablename__ = "observed_trades"
     __table_args__ = (
         Index("ix_ot_market_token_ts", "market_id", "token_id", "timestamp"),
-        Index("ix_ot_timestamp", "timestamp"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -284,8 +283,7 @@ class Signal(Base):
     __tablename__ = "signals"
     __table_args__ = (
         Index("ix_signals_market_strategy", "market_id", "strategy"),
-        Index("ix_signals_status", "status"),
-        Index("ix_signals_created_at", "created_at"),
+        # status and created_at indexes are auto-created by index=True on columns
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -306,6 +304,14 @@ class Signal(Base):
         Float, nullable=False, default=1.0,
         comment="Strategy confidence score in [0, 1].",
     )
+    bid_at_signal: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+        comment="Best bid at the moment the signal was generated.",
+    )
+    ask_at_signal: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+        comment="Best ask at the moment the signal was generated.",
+    )
     params: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict,
         comment="Strategy-specific parameters snapshot at signal creation time.",
@@ -315,7 +321,7 @@ class Signal(Base):
         comment="pending | executed | expired | rejected.",
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=_NOW,
+        DateTime(timezone=True), nullable=False, server_default=_NOW, index=True,
     )
 
     # Relationships
@@ -407,8 +413,7 @@ class Position(Base):
     __tablename__ = "positions"
     __table_args__ = (
         Index("ix_positions_market_strategy", "market_id", "strategy"),
-        Index("ix_positions_status", "status"),
-        Index("ix_positions_opened_at", "opened_at"),
+        # status index auto-created by index=True on column
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -434,7 +439,7 @@ class Position(Base):
         comment="open | closed.",
     )
     opened_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=_NOW,
+        DateTime(timezone=True), nullable=False, server_default=_NOW, index=True,
     )
     closed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
@@ -482,7 +487,6 @@ class PriceSnapshot(Base):
     __tablename__ = "price_snapshots"
     __table_args__ = (
         Index("ix_ps_crypto_ts", "crypto", "timestamp"),
-        Index("ix_ps_timestamp", "timestamp"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

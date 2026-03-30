@@ -14,9 +14,31 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import JSON
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from prophet.db.database import Base
+
+
+# ---------------------------------------------------------------------------
+# SQLite compatibility: map JSONB → JSON for in-memory tests
+# ---------------------------------------------------------------------------
+
+from sqlalchemy.dialects.postgresql import JSONB
+
+_jsonb_patched = False
+
+
+def _patch_jsonb_columns():
+    """Replace JSONB with JSON in all mapped columns for SQLite compat."""
+    global _jsonb_patched
+    if _jsonb_patched:
+        return
+    for table in Base.metadata.tables.values():
+        for col in table.columns:
+            if isinstance(col.type, JSONB):
+                col.type = JSON()
+    _jsonb_patched = True
 
 
 # ---------------------------------------------------------------------------
@@ -46,11 +68,14 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     # Import models so they register on Base.metadata
     from prophet.db import models  # noqa: F401
 
+    # Patch JSONB → JSON before creating engine
+    _patch_jsonb_columns()
+
     engine = create_async_engine(TEST_DATABASE_URL, echo=False, future=True)
 
-    # Create all tables
+    # Create all tables (checkfirst avoids duplicate index errors)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(Base.metadata.create_all, checkfirst=True)
 
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -131,8 +156,6 @@ def sample_orderbook():
         side.asks = [MagicMock(price=best_ask, size=500)]
         return side
 
-    # YES side: bid=0.475, ask=0.525 → mid=0.50, spread≈9.5%
-    # Combined YES_ask + NO_ask = 0.525 + 0.525 = 1.05 (no gap)
     yes_side = _make_side(best_bid=0.475, best_ask=0.525)
     no_side = _make_side(best_bid=0.475, best_ask=0.525)
 

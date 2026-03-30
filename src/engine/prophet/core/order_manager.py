@@ -506,7 +506,12 @@ class OrderManager:
         return "hold_to_resolution", {}
 
     async def _get_current_price(self, position: Any) -> float | None:
-        """Get the current mid price for a position's side."""
+        """Get the current best_bid for a position's side.
+
+        We use best_bid (not mid_price) because that's the price you'd
+        actually get if you sold.  Mid_price is misleading on wide spreads
+        — e.g. bid=0.002, ask=0.899 gives mid=0.45 which is unrealistic.
+        """
         try:
             from prophet.db.database import get_session
             from prophet.db.models import Market
@@ -525,12 +530,12 @@ class OrderManager:
             # Try cached order book first
             side_key = "yes" if position.side == "YES" else "no"
             cached = await self._ob_service.get_cached_book(position.market_id, side_key)
-            if cached and cached.mid_price is not None:
-                return cached.mid_price
+            if cached and cached.best_bid is not None:
+                return cached.best_bid
 
             # Live fetch
             book = await self._ob_service.fetch_and_compute(token_id)
-            return book.mid_price
+            return book.best_bid
         except Exception as exc:
             logger.debug("_get_current_price error: %s", exc)
             return None
