@@ -104,17 +104,21 @@ class PoliticalFavouriteStrategy(StrategyBase):
         if category != "politics":
             return []
 
-        # Estimate time to resolution
-        end_date = getattr(market, "end_date", None)
+        # Estimate time to resolution (DB column is resolution_date, not end_date)
+        end_date = getattr(market, "end_date", None) or getattr(market, "resolution_date", None)
         if not end_date:
             return []
 
+        from datetime import date as _date
         now = datetime.now(timezone.utc)
         if isinstance(end_date, str):
             try:
                 end_date = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
             except (ValueError, TypeError):
                 return []
+        elif isinstance(end_date, _date) and not isinstance(end_date, datetime):
+            # resolution_date is a date object — convert to datetime at midnight UTC
+            end_date = datetime(end_date.year, end_date.month, end_date.day, tzinfo=timezone.utc)
 
         if end_date.tzinfo is None:
             end_date = end_date.replace(tzinfo=timezone.utc)

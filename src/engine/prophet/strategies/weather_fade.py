@@ -108,16 +108,19 @@ class WeatherFadeStrategy(StrategyBase):
             return []
 
         # Estimate time to resolution
-        end_date = getattr(market, "end_date", None)
+        end_date = getattr(market, "end_date", None) or getattr(market, "resolution_date", None)
         if not end_date:
             return []
 
+        from datetime import date as _date
         now = datetime.now(timezone.utc)
         if isinstance(end_date, str):
             try:
                 end_date = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
             except (ValueError, TypeError):
                 return []
+        elif isinstance(end_date, _date) and not isinstance(end_date, datetime):
+            end_date = datetime(end_date.year, end_date.month, end_date.day, tzinfo=timezone.utc)
 
         if end_date.tzinfo is None:
             end_date = end_date.replace(tzinfo=timezone.utc)

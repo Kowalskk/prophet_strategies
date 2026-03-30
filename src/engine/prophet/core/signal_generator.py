@@ -34,6 +34,17 @@ from prophet.core.scanner import CATEGORY_STRATEGIES, CATEGORY_SIZE_MULTIPLIER
 if TYPE_CHECKING:
     from prophet.core.risk_manager import RiskManager
 
+
+class _SnapshotBook:
+    """Minimal orderbook stub built from a DB snapshot row."""
+    __slots__ = ("best_bid", "best_ask", "bids", "asks")
+
+    def __init__(self, best_bid: float | None, best_ask: float | None) -> None:
+        self.best_bid = best_bid
+        self.best_ask = best_ask
+        self.bids: list = []
+        self.asks: list = []
+
 logger = logging.getLogger(__name__)
 
 
@@ -316,7 +327,7 @@ class SignalGenerator:
         return list(per_strategy.values())
 
     async def _get_orderbook(self, market: Any) -> dict[str, Any] | None:
-        """Fetch order book for YES and NO sides (cache → live for crypto only)."""
+        """Fetch order book for YES and NO sides (cache → DB snapshot → live fetch for crypto)."""
         try:
             # Try Redis cache first
             yes_book = await self._ob_service.get_cached_book(market.id, "yes")
@@ -325,9 +336,8 @@ class SignalGenerator:
             if yes_book is None or no_book is None:
                 category = getattr(market, "category", None) or "crypto"
                 if category != "crypto":
-                    # Non-crypto: don't do live fetch (too slow for 1000+ markets).
-                    # The snapshot job populates cache for top non-crypto markets.
-                    return None
+                    # Non-crypto: look up most recent DB snapshot (no live fetch)
+                    return await self._get_orderbook_from_db(market.id)
                 # Crypto: live fetch as fallback
                 yes_book = await self._ob_service.fetch_and_compute(market.token_id_yes)
                 no_book = await self._ob_service.fetch_and_compute(market.token_id_no)
@@ -337,6 +347,38 @@ class SignalGenerator:
             logger.warning(
                 "_get_orderbook failed for market_id=%d: %s", market.id, exc
             )
+            return None
+
+    async def _get_orderbook_from_db(self, market_id: int) -> dict[str, Any] | None:
+        """Read latest OB snapshot from DB for a non-crypto market."""
+        from prophet.db.models import OrderBookSnapshot
+        from sqlalchemy import select, desc
+
+        try:
+            result = {"yes": None, "no": None}
+            for side in ("yes", "no"):
+                stmt = (
+                    select(OrderBookSnapshot)
+                    .where(
+                        OrderBookSnapshot.market_id == market_id,
+                        OrderBookSnapshot.side == side,
+                    )
+                    .order_by(desc(OrderBookSnapshot.timestamp))
+                    .limit(1)
+                )
+                row = await self._db.execute(stmt)
+                snap = row.scalars().first()
+                if snap:
+                    # Build a minimal dict that strategies can use
+                    result[side] = _SnapshotBook(
+                        best_bid=snap.best_bid,
+                        best_ask=snap.best_ask,
+                    )
+            if result["yes"] is None and result["no"] is None:
+                return None
+            return result
+        except Exception as exc:
+            logger.warning("_get_orderbook_from_db(%d) failed: %s", market_id, exc)
             return None
 
     async def _get_spot_price(self, crypto: str | None) -> float:
