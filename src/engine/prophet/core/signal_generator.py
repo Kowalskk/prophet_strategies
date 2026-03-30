@@ -144,10 +144,16 @@ class SignalGenerator:
         # Fetch current order book (try cache first, else live fetch)
         orderbook = await self._get_orderbook(market)
         if not orderbook:
-            logger.warning(
-                "SignalGenerator: could not get order book for market_id=%d", market.id
-            )
-            return []
+            category = getattr(market, "category", None) or "crypto"
+            if category == "crypto":
+                # Crypto markets must have orderbook data
+                logger.warning(
+                    "SignalGenerator: could not get order book for market_id=%d", market.id
+                )
+                return []
+            # Non-crypto: strategies use last_trade_price from WS, not deep OB data
+            # Pass an empty orderbook stub so strategies can still run
+            orderbook = {"yes": None, "no": None}
 
         # Fetch current spot price for this market's crypto
         spot_price = await self._get_spot_price(market.crypto)
@@ -310,14 +316,19 @@ class SignalGenerator:
         return list(per_strategy.values())
 
     async def _get_orderbook(self, market: Any) -> dict[str, Any] | None:
-        """Fetch order book for YES and NO sides (cache → live)."""
+        """Fetch order book for YES and NO sides (cache → live for crypto only)."""
         try:
             # Try Redis cache first
             yes_book = await self._ob_service.get_cached_book(market.id, "yes")
             no_book = await self._ob_service.get_cached_book(market.id, "no")
 
             if yes_book is None or no_book is None:
-                # Live fetch
+                category = getattr(market, "category", None) or "crypto"
+                if category != "crypto":
+                    # Non-crypto: don't do live fetch (too slow for 1000+ markets).
+                    # The snapshot job populates cache for top non-crypto markets.
+                    return None
+                # Crypto: live fetch as fallback
                 yes_book = await self._ob_service.fetch_and_compute(market.token_id_yes)
                 no_book = await self._ob_service.fetch_and_compute(market.token_id_no)
 

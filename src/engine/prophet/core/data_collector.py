@@ -78,10 +78,22 @@ class DataCollector:
         async with sf() as session:
             try:
                 from prophet.db.models import Market
-                result = await session.execute(
-                    select(Market).where(Market.status == "active")
+                # Snapshot crypto markets fully + top 50 non-crypto by volume.
+                # Running 1393 markets serially causes jobs to overlap → "Session is already flushing".
+                crypto_result = await session.execute(
+                    select(Market).where(
+                        Market.status == "active",
+                        Market.category == "crypto",
+                    )
                 )
-                markets = list(result.scalars().all())
+                non_crypto_result = await session.execute(
+                    select(Market).where(
+                        Market.status == "active",
+                        Market.category != "crypto",
+                        Market.category.isnot(None),
+                    ).order_by(Market.id.desc()).limit(50)
+                )
+                markets = list(crypto_result.scalars().all()) + list(non_crypto_result.scalars().all())
             except Exception as exc:
                 logger.error("collect_orderbooks: failed to load markets: %s", exc)
                 return 0

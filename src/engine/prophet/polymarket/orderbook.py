@@ -276,7 +276,6 @@ class OrderBookService:
                 raw_book=raw_book,
             )
             self._db.add(snapshot)
-            await self._db.flush()
             logger.debug(
                 "Persisted OB snapshot market_id=%d side=%s bid=%.4f ask=%.4f",
                 market_id, side, book.best_bid or 0, book.best_ask or 0,
