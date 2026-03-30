@@ -45,7 +45,7 @@ class VolatilitySpreadStrategy(StrategyBase):
     )
     default_params: dict[str, Any] = {
         "spread_percent": 5.0,      # % below mid price to place orders
-        "entry_price_max": 0.45,    # max price per share — allows markets up to ~55/45 split
+        "entry_price_max": 0.97,    # max combined cost (YES+NO) — must be < 1.0 for guaranteed edge
         "capital_per_side": 50.0,   # USD per YES order and per NO order
         "exit_strategy": "sell_at_target",
         "sell_target_pct": 100.0,   # sell when price doubles (100% gain)
@@ -98,18 +98,16 @@ class VolatilitySpreadStrategy(StrategyBase):
         target_yes = yes_mid * (1.0 - spread_frac)
         target_no = no_mid * (1.0 - spread_frac)
 
-        # Skip if either target would be above the max entry price
-        if target_yes > p["entry_price_max"]:
+        # The real edge of VS is that combined_cost < 1.0 (guaranteed profit).
+        # Checking each side individually against entry_price_max is wrong for
+        # binary markets (YES + NO = 1), where one side is always > 0.5.
+        # Instead, enforce max combined cost < 1.0 with a margin.
+        combined_cost = target_yes + target_no
+        max_combined = p["entry_price_max"]  # re-used as max combined cost
+        if combined_cost >= max_combined:
             logger.debug(
-                "volatility_spread: target_yes=%.4f > entry_price_max=%.4f — skipping market_id=%s",
-                target_yes, p["entry_price_max"], market.id,
-            )
-            return []
-
-        if target_no > p["entry_price_max"]:
-            logger.debug(
-                "volatility_spread: target_no=%.4f > entry_price_max=%.4f — skipping market_id=%s",
-                target_no, p["entry_price_max"], market.id,
+                "volatility_spread: combined_cost=%.4f >= max_combined=%.4f — skipping market_id=%s",
+                combined_cost, max_combined, market.id,
             )
             return []
 
@@ -170,9 +168,9 @@ class VolatilitySpreadStrategy(StrategyBase):
             raise ValueError(
                 f"spread_percent must be in (0, 100), got {p['spread_percent']}"
             )
-        if not 0.0 < p["entry_price_max"] <= 1.0:
+        if not 0.0 < p["entry_price_max"] < 1.0:
             raise ValueError(
-                f"entry_price_max must be in (0, 1], got {p['entry_price_max']}"
+                f"entry_price_max (combined cost) must be in (0, 1), got {p['entry_price_max']}"
             )
         if p["capital_per_side"] <= 0:
             raise ValueError(

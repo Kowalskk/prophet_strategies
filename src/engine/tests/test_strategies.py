@@ -58,7 +58,7 @@ class TestVolatilitySpread:
 
         params = {
             "spread_percent": 5.0,
-            "entry_price_max": 0.55,  # generous max to allow signals
+            "entry_price_max": 0.97,  # max combined cost (YES+NO); 0.95 combined < 0.97 → passes
             "capital_per_side": 50.0,
         }
         signals = await strategy.evaluate(sample_market, ob, 100_000.0, params)
