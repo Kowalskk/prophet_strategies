@@ -52,6 +52,9 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+BATCH_SIZE = 100  # markets evaluated per cycle (rotates through all markets)
+
+
 class SignalGenerator:
     """Evaluates active markets and generates trade signals.
 
@@ -78,6 +81,7 @@ class SignalGenerator:
         self._db = db_session
         self._risk = risk_manager
         self._redis = redis_client
+        self._batch_offset: int = 0  # rotating batch cursor
 
         self._ob_service = OrderBookService(
             clob_client=clob_client,
@@ -114,15 +118,47 @@ class SignalGenerator:
             if old_risk_db is not None:
                 self._risk._db = session
             try:
-                stmt = select(Market).where(Market.status == "active")
-                result = await session.execute(stmt)
-                markets = list(result.scalars().all())
+                # Count total active markets for rotating batch
+                from sqlalchemy import func
+                count_result = await session.execute(
+                    select(func.count()).select_from(Market).where(Market.status == "active")
+                )
+                total = count_result.scalar() or 0
 
-                if not markets:
+                if total == 0:
                     logger.debug("SignalGenerator: no active markets")
                     return []
 
-                logger.info("SignalGenerator: evaluating %d active markets", len(markets))
+                # Rotate through all markets across cycles
+                stmt = (
+                    select(Market)
+                    .where(Market.status == "active")
+                    .order_by(Market.id)
+                    .offset(self._batch_offset)
+                    .limit(BATCH_SIZE)
+                )
+                result = await session.execute(stmt)
+                markets = list(result.scalars().all())
+
+                # If we hit end of list, also fetch from beginning to fill batch
+                if len(markets) < BATCH_SIZE and self._batch_offset > 0:
+                    remaining = BATCH_SIZE - len(markets)
+                    stmt2 = (
+                        select(Market)
+                        .where(Market.status == "active")
+                        .order_by(Market.id)
+                        .limit(remaining)
+                    )
+                    result2 = await session.execute(stmt2)
+                    markets += list(result2.scalars().all())
+
+                # Advance cursor for next cycle
+                self._batch_offset = (self._batch_offset + BATCH_SIZE) % max(total, 1)
+
+                logger.info(
+                    "SignalGenerator: evaluating %d markets (offset=%d, total=%d)",
+                    len(markets), self._batch_offset, total,
+                )
                 new_signals: list[Any] = []
 
                 for market in markets:
