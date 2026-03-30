@@ -239,8 +239,9 @@ class OrderManager:
             )
             return False
 
-        # Fill at target price (paper mode)
-        fill_price = order.target_price
+        # Fill at best_ask (realistic slippage simulation)
+        # In live, you pay the ask — not your limit price target
+        fill_price = best_ask
         fill_size_usd = order.size_usd
         fill_at = _utcnow()
 
