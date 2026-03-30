@@ -91,7 +91,8 @@ class DataCollector:
                         Market.status == "active",
                         Market.category != "crypto",
                         Market.category.isnot(None),
-                    ).order_by(Market.id.desc()).limit(50)
+                        Market.volume_usd >= 30000,
+                    ).order_by(Market.volume_usd.desc()).limit(300)
                 )
                 markets = list(crypto_result.scalars().all()) + list(non_crypto_result.scalars().all())
             except Exception as exc:

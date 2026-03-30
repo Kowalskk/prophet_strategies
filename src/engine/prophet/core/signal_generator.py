@@ -61,7 +61,7 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-BATCH_SIZE = 100  # markets evaluated per cycle (rotates through all markets)
+BATCH_SIZE = 300  # markets evaluated per cycle (rotates through all markets)
 
 
 class SignalGenerator:
