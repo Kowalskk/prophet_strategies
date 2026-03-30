@@ -348,8 +348,8 @@ class MarketScanner:
                 except Exception as exc:
                     logger.warning("full_scan: tag=%s failed: %s", tag, exc)
 
-        # 3. Update resolved markets
-        await self._update_resolved_markets()
+        # 3. Check resolution only for markets with open positions
+        await self._check_resolution_for_open_positions()
 
         # 4. Auto-assign strategies to new markets
         await self._auto_assign_strategies()
@@ -383,7 +383,7 @@ class MarketScanner:
             except Exception as exc:
                 logger.debug("quick_scan: tag=%s failed: %s", tag, exc)
 
-        await self._update_resolved_markets()
+        await self._check_resolution_for_open_positions()
         await self._auto_assign_strategies()
 
         try:
@@ -639,20 +639,34 @@ class MarketScanner:
     # Resolution updates
     # ------------------------------------------------------------------
 
-    async def _update_resolved_markets(self) -> None:
-        """Check all active DB markets against Gamma for resolution updates."""
-        from prophet.db.models import Market
+    async def _check_resolution_for_open_positions(self) -> None:
+        """Check Gamma resolution only for markets that have open positions.
 
-        stmt = select(Market).where(Market.status == "active")
+        This replaces the old _update_resolved_markets which queried ALL active
+        markets (873+ HTTP calls). We only care about resolution when money is
+        at stake — i.e., markets with open paper positions.
+        """
+        from prophet.db.models import Market, Position
+
+        # Find distinct market_ids with open positions
+        stmt = (
+            select(Market)
+            .join(Position, Position.market_id == Market.id)
+            .where(Position.status == "open", Market.status == "active")
+            .distinct()
+        )
         result = await self._db.execute(stmt)
-        active_markets = result.scalars().all()
+        markets_with_positions = result.scalars().all()
 
-        if not active_markets:
+        if not markets_with_positions:
             return
 
-        logger.debug("Checking resolution status for %d active markets", len(active_markets))
+        logger.debug(
+            "Checking resolution for %d markets with open positions",
+            len(markets_with_positions),
+        )
 
-        for market in active_markets:
+        for market in markets_with_positions:
             try:
                 resolution = await self._gamma.get_market_resolution(market.condition_id)
                 if resolution["resolved"] and resolution["outcome"]:
@@ -668,7 +682,7 @@ class MarketScanner:
                     else:
                         market.resolution_time = datetime.now(timezone.utc)
                     logger.info(
-                        "Resolution update: market_id=%d %s -> %s",
+                        "Resolution confirmed: market_id=%d %s -> %s",
                         market.id, market.condition_id[:12], market.resolved_outcome,
                     )
             except Exception as exc:
@@ -680,7 +694,7 @@ class MarketScanner:
         try:
             await self._db.flush()
         except Exception as exc:
-            logger.error("DB flush failed during resolution update: %s", exc)
+            logger.error("DB flush failed during resolution check: %s", exc)
             raise
 
     async def _get_market_by_condition_id(self, condition_id: str) -> Any | None:
