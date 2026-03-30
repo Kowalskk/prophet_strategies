@@ -508,6 +508,14 @@ class MarketScanner:
                 if parsed["crypto"] not in settings.target_cryptos:
                     stats["skipped"] += 1
                     continue
+            else:
+                # Non-crypto: extract resolution_date from end_date_iso field
+                if pm.end_date_iso:
+                    try:
+                        _end = datetime.fromisoformat(pm.end_date_iso.replace("Z", "+00:00"))
+                        parsed["resolution_date"] = _end.date()
+                    except (ValueError, TypeError):
+                        pass
 
             # For non-crypto: require minimum volume AND liquidity
             if category != "crypto":
@@ -541,6 +549,14 @@ class MarketScanner:
                 # Update category if missing
                 if existing.category is None and category:
                     existing.category = category
+
+                # Backfill resolution_date if missing and we have end_date_iso
+                if existing.resolution_date is None and pm.end_date_iso:
+                    try:
+                        _end = datetime.fromisoformat(pm.end_date_iso.replace("Z", "+00:00"))
+                        existing.resolution_date = _end.date()
+                    except (ValueError, TypeError):
+                        pass
 
                 # Update resolution
                 changed = False
