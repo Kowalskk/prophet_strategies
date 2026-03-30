@@ -340,22 +340,40 @@ class SignalGenerator:
         return list(per_strategy.values())
 
     async def _get_orderbook(self, market: Any) -> dict[str, Any] | None:
-        """Fetch order book for YES and NO sides (cache → DB snapshot → live fetch for crypto)."""
+        """Fetch order book: cache → DB snapshot → live fetch (crypto only, with timeout)."""
+        import asyncio
+
         try:
             # Try Redis cache first
             yes_book = await self._ob_service.get_cached_book(market.id, "yes")
             no_book = await self._ob_service.get_cached_book(market.id, "no")
 
-            if yes_book is None or no_book is None:
-                category = getattr(market, "category", None) or "crypto"
-                if category != "crypto":
-                    # Non-crypto: look up most recent DB snapshot (no live fetch)
-                    return await self._get_orderbook_from_db(market.id)
-                # Crypto: live fetch as fallback
-                yes_book = await self._ob_service.fetch_and_compute(market.token_id_yes)
-                no_book = await self._ob_service.fetch_and_compute(market.token_id_no)
+            if yes_book is not None and no_book is not None:
+                return {"yes": yes_book, "no": no_book}
 
-            return {"yes": yes_book, "no": no_book}
+            # Cache miss — try DB snapshot (works for all categories)
+            db_book = await self._get_orderbook_from_db(market.id)
+            if db_book is not None:
+                return db_book
+
+            # DB miss — live fetch only for crypto, with 5s timeout
+            category = getattr(market, "category", None) or "crypto"
+            if category != "crypto":
+                return None
+
+            try:
+                yes_book = await asyncio.wait_for(
+                    self._ob_service.fetch_and_compute(market.token_id_yes),
+                    timeout=5.0,
+                )
+                no_book = await asyncio.wait_for(
+                    self._ob_service.fetch_and_compute(market.token_id_no),
+                    timeout=5.0,
+                )
+                return {"yes": yes_book, "no": no_book}
+            except asyncio.TimeoutError:
+                logger.debug("_get_orderbook live fetch timed out for market_id=%d", market.id)
+                return None
         except Exception as exc:
             logger.warning(
                 "_get_orderbook failed for market_id=%d: %s", market.id, exc
