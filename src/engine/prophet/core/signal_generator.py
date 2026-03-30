@@ -253,14 +253,19 @@ class SignalGenerator:
                 signal.strategy = strategy_name
                 # Apply category-based size multiplier
                 signal.size_usd = round(signal.size_usd * size_mult, 2)
-                db_signal = await self._process_signal(signal, params)
+                # Capture spread at signal time
+                ob_side = orderbook.get(signal.side.lower()) if orderbook else None
+                bid_at = getattr(ob_side, "best_bid", None)
+                ask_at = getattr(ob_side, "best_ask", None)
+                db_signal = await self._process_signal(signal, params, bid_at, ask_at)
                 if db_signal is not None:
                     new_db_signals.append(db_signal)
 
         return new_db_signals
 
     async def _process_signal(
-        self, signal: TradeSignal, params: dict[str, Any]
+        self, signal: TradeSignal, params: dict[str, Any],
+        bid_at: float | None = None, ask_at: float | None = None,
     ) -> Any | None:
         """Check a signal with RiskManager and persist if approved."""
         from prophet.db.models import Signal
@@ -318,6 +323,8 @@ class SignalGenerator:
                 },
                 status="pending",
                 created_at=_utcnow(),
+                bid_at_signal=bid_at,
+                ask_at_signal=ask_at,
             )
             self._db.add(db_signal)
             await self._db.flush()

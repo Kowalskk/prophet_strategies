@@ -459,7 +459,9 @@ class OrderManager:
             position.size_usd / position.entry_price if position.entry_price else 0.0
         )
         gross_pnl = (exit_price - position.entry_price) * shares
-        fees = exit_price * shares * _FEE_RATE
+        entry_fee = position.entry_price * shares * _FEE_RATE
+        exit_fee = exit_price * shares * _FEE_RATE
+        fees = entry_fee + exit_fee
         net_pnl = gross_pnl - fees
         return round(gross_pnl, 4), round(fees, 4), round(net_pnl, 4)
 
