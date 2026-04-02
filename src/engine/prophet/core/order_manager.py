@@ -72,9 +72,11 @@ class OrderManager:
         clob_client: PolymarketClient,
         db_session: AsyncSession | None = None,
         redis_client: Any | None = None,
+        signal_router: Any | None = None,
     ) -> None:
         self._clob = clob_client
         self._redis = redis_client
+        self._signal_router = signal_router  # None = always paper
         self._ob_service = OrderBookService(
             clob_client=clob_client,
             db_session=None,
@@ -87,7 +89,40 @@ class OrderManager:
 
     async def create_paper_order(self, db: AsyncSession, signal: Any) -> Any:
         """Create a PaperOrder from an approved Signal."""
-        from prophet.db.models import PaperOrder
+        from prophet.db.models import PaperOrder, Position
+
+        # Dedup: skip if we already have an open position OR a pending/open paper order
+        existing_pos = await db.scalar(
+            select(Position.id).where(
+                Position.market_id == signal.market_id,
+                Position.strategy == signal.strategy,
+                Position.side == signal.side,
+                Position.status == "open",
+            ).limit(1)
+        )
+        if existing_pos:
+            signal.status = "skipped"
+            logger.debug(
+                "Dedup: skipping signal market_id=%d %s %s — position %d already open",
+                signal.market_id, signal.strategy, signal.side, existing_pos,
+            )
+            return None
+
+        existing_order = await db.scalar(
+            select(PaperOrder.id).where(
+                PaperOrder.market_id == signal.market_id,
+                PaperOrder.strategy == signal.strategy,
+                PaperOrder.side == signal.side,
+                PaperOrder.status == "open",
+            ).limit(1)
+        )
+        if existing_order:
+            signal.status = "skipped"
+            logger.debug(
+                "Dedup: skipping signal market_id=%d %s %s — paper order %d already open",
+                signal.market_id, signal.strategy, signal.side, existing_order,
+            )
+            return None
 
         order = PaperOrder(
             signal_id=signal.id,
@@ -136,7 +171,18 @@ class OrderManager:
             placed = 0
             for signal in pending:
                 try:
-                    await self.create_paper_order(db, signal)
+                    if self._signal_router is not None and self._signal_router.route(signal) == "live":
+                        from prophet.db.models import Market
+                        market = await db.get(Market, signal.market_id)
+                        token_id = (
+                            market.token_id_yes if signal.side == "YES" else market.token_id_no
+                        ) if market else None
+                        route = await self._signal_router.dispatch(db, signal, self, token_id)
+                        logger.info(
+                            "place_pending_orders: signal_id=%d routed to %s", signal.id, route
+                        )
+                    else:
+                        await self.create_paper_order(db, signal)
                     placed += 1
                 except Exception as exc:
                     logger.error(
@@ -250,6 +296,22 @@ class OrderManager:
         order.fill_size_usd = fill_size_usd
         order.filled_at = fill_at
 
+        # Dedup: skip position creation if one already exists
+        existing_pos = await db.scalar(
+            select(Position.id).where(
+                Position.market_id == order.market_id,
+                Position.strategy == order.strategy,
+                Position.side == order.side,
+                Position.status == "open",
+            ).limit(1)
+        )
+        if existing_pos:
+            logger.debug(
+                "PaperOrder %d fill skipped — position %d already open for market_id=%d %s %s",
+                order.id, existing_pos, order.market_id, order.strategy, order.side,
+            )
+            return False
+
         # Create position
         shares = fill_size_usd / fill_price if fill_price > 0 else 0.0
         position = Position(
@@ -279,34 +341,90 @@ class OrderManager:
         """Check all open positions for exit conditions.
 
         Called every 5 minutes by the scheduler.
+
+        Processes positions in pages of 200 to avoid holding a single enormous
+        DB session that blocks other jobs and causes APScheduler misfire warnings.
+        Each page is committed independently so progress is never lost.
         """
         from prophet.db.database import get_session
         from prophet.db.models import Position
 
+        _PAGE_SIZE = 200
+
+        # Count open positions first (cheap query)
         async with get_session() as db:
-            stmt = select(Position).where(Position.status == "open")
-            result = await db.execute(stmt)
-            open_positions = list(result.scalars().all())
+            from sqlalchemy import func
+            total_open = await db.scalar(
+                select(func.count(Position.id)).where(Position.status == "open")
+            ) or 0
 
-            if not open_positions:
-                return 0
+        if not total_open:
+            return 0
 
-            closed_count = 0
-            for position in open_positions:
+        # Only suppress individual notifs when there are genuinely massive backlogs
+        # (>500). During normal operation (<500) send individual notifs per close.
+        self._suppress_close_notif = total_open > 500
+
+        closed_count = 0
+        offset = 0
+
+        while True:
+            async with get_session() as db:
+                stmt = (
+                    select(Position)
+                    .where(Position.status == "open")
+                    .order_by(Position.id)
+                    .limit(_PAGE_SIZE)
+                    .offset(offset)
+                )
+                result = await db.execute(stmt)
+                page = list(result.scalars().all())
+
+                if not page:
+                    break
+
+                page_closed = 0
+                for position in page:
+                    try:
+                        closed = await self._check_position_exit(db, position)
+                        if closed:
+                            closed_count += 1
+                            page_closed += 1
+                            if page_closed % 10 == 0:
+                                await db.commit()
+                    except Exception as exc:
+                        logger.error(
+                            "check_exits: error for position_id=%d: %s", position.id, exc
+                        )
+
+                if page_closed > 0:
+                    await db.commit()
+
+                # If this page had fewer rows than PAGE_SIZE, we're done
+                if len(page) < _PAGE_SIZE:
+                    break
+
+                # Advance offset by how many were NOT closed (closed rows
+                # disappear from the next query so offset stays correct)
+                offset += len(page) - page_closed
+
+        self._suppress_close_notif = False
+
+        if closed_count > 0:
+            logger.info("check_exits: %d/%d positions closed", closed_count, total_open)
+            if total_open > 500:
                 try:
-                    closed = await self._check_position_exit(db, position)
-                    if closed:
-                        closed_count += 1
-                except Exception as exc:
-                    logger.error(
-                        "check_exits: error for position_id=%d: %s", position.id, exc
-                    )
+                    from prophet.core.telegram_bot import notifier
+                    if notifier.enabled:
+                        await notifier._send(
+                            f"📊 <b>Batch close</b>: {closed_count}/{total_open} posiciones cerradas"
+                        )
+                except Exception:
+                    pass
+        else:
+            logger.debug("check_exits: 0/%d positions closed", total_open)
 
-            logger.debug(
-                "check_exits: %d/%d positions closed", closed_count, len(open_positions)
-            )
-            return closed_count
-        return 0  # unreachable
+        return closed_count
 
     async def _check_position_exit(self, db: AsyncSession, position: Any) -> bool:
         """Evaluate exit conditions for one open position.
@@ -324,6 +442,23 @@ class OrderManager:
         market = market_result.scalar_one_or_none()
         if market is None:
             return False
+
+        # Attach market info for Telegram notifications
+        position._market_question = market.question
+        # polymarket.com/event/{slug} gives 404 for group markets — use condition_id instead
+        cid = getattr(market, "condition_id", None)
+        position._market_url = f"https://polymarket.com/market/{cid}" if cid else ""
+
+        # ── Fast path: market already resolved → close immediately ─────
+        if market.resolved_outcome:
+            exit_price = self._resolution_exit_price(
+                position.side, market.resolved_outcome
+            )
+            return await self._close_position(
+                position,
+                exit_price=exit_price,
+                exit_reason="resolution",
+            )
 
         # ── hold_to_resolution ──────────────────────────────────────────
         if exit_strategy == "hold_to_resolution":
@@ -402,6 +537,43 @@ class OrderManager:
                 )
             return False
 
+        # ── time_exit ──────────────────────────────────────────────────
+        if exit_strategy == "time_exit":
+            target_pct = float(exit_params.get("target_pct", 100.0))
+            target_price = min(position.entry_price * (1.0 + target_pct / 100.0), 1.0)
+
+            current_price = await self._get_current_price(position)
+
+            # 1. Target hit — best outcome
+            if current_price is not None and current_price >= target_price:
+                return await self._close_position(
+                    position, exit_price=current_price, exit_reason="target_hit",
+                )
+
+            # 2. Time-based exit: N days before resolution_date
+            days_before = float(exit_params.get("days_before_expiry", 3.0))
+            if market.resolution_date:
+                from datetime import date as _date
+                today = _utcnow().date()
+                days_remaining = (market.resolution_date - today).days
+                if days_remaining <= days_before:
+                    sell_price = current_price if current_price is not None else position.entry_price * 0.3
+                    sell_price = max(sell_price, 0.001)
+                    return await self._close_position(
+                        position, exit_price=sell_price, exit_reason="time_exit",
+                    )
+
+            # 3. Fallback: resolution (shouldn't normally hit this with time_exit)
+            if market.resolved_outcome:
+                exit_price = self._resolution_exit_price(
+                    position.side, market.resolved_outcome
+                )
+                return await self._close_position(
+                    position, exit_price=exit_price, exit_reason="resolution",
+                )
+
+            return False
+
         logger.warning(
             "Unknown exit_strategy %r for position_id=%d", exit_strategy, position.id
         )
@@ -411,7 +583,7 @@ class OrderManager:
         self, position: Any, exit_price: float, exit_reason: str
     ) -> bool:
         """Mark a position as closed and compute PnL."""
-        gross_pnl, fees, net_pnl = self.calculate_pnl(position, exit_price)
+        gross_pnl, fees, net_pnl = self.calculate_pnl(position, exit_price, exit_reason)
         position.status = "closed"
         position.closed_at = _utcnow()
         position.exit_price = exit_price
@@ -427,11 +599,12 @@ class OrderManager:
             position.entry_price, exit_price, net_pnl, exit_reason,
         )
 
-        # Telegram notification (fire-and-forget)
+        # Telegram notification (fire-and-forget, skip in batch mode)
         try:
             from prophet.core.telegram_bot import notifier
-            if notifier.enabled:
-                market_question = getattr(position, "_market_question", f"Market #{position.market_id}")
+            if notifier.enabled and not getattr(self, '_suppress_close_notif', False):
+                market_question = getattr(position, "_market_question", None) or f"Market #{position.market_id}"
+                market_url = getattr(position, "_market_url", None) or ""
                 import asyncio
                 asyncio.ensure_future(notifier.notify_trade_closed(
                     strategy=position.strategy,
@@ -441,6 +614,7 @@ class OrderManager:
                     exit_price=exit_price,
                     net_pnl=net_pnl,
                     exit_reason=exit_reason,
+                    market_url=market_url,
                 ))
         except Exception:
             pass  # never let notifications break trading
@@ -452,16 +626,28 @@ class OrderManager:
     # ------------------------------------------------------------------
 
     def calculate_pnl(
-        self, position: Any, exit_price: float
+        self, position: Any, exit_price: float, exit_reason: str = ""
     ) -> tuple[float, float, float]:
-        """Calculate gross PnL, fees, and net PnL for a position."""
+        """Calculate gross PnL, fees, and net PnL for a position.
+
+        Polymarket fee structure (March 2026):
+        - Makers (limit orders): 0% fee
+        - Takers: fee = shares * feeRate * p * (1-p), crypto feeRate=0.072
+        - Resolution payouts: 0% fee
+
+        We assume entry is always maker (limit order / stink bid).
+        Exit via resolution = 0 fee. Exit via sell = taker fee (conservative).
+        """
         shares = position.shares or (
             position.size_usd / position.entry_price if position.entry_price else 0.0
         )
         gross_pnl = (exit_price - position.entry_price) * shares
-        entry_fee = position.entry_price * shares * _FEE_RATE
-        exit_fee = exit_price * shares * _FEE_RATE
-        fees = entry_fee + exit_fee
+        # Entry: maker (limit order) → 0 fee
+        # Exit: resolution → 0 fee, sell → taker fee
+        if exit_reason.startswith("resolution"):
+            fees = 0.0
+        else:
+            fees = shares * 0.072 * exit_price * (1 - exit_price)
         net_pnl = gross_pnl - fees
         return round(gross_pnl, 4), round(fees, 4), round(net_pnl, 4)
 

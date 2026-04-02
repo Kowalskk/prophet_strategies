@@ -50,20 +50,51 @@ logger = logging.getLogger(__name__)
 
 SCAN_CATEGORIES: dict[str, list[str]] = {
     "crypto": ["crypto"],
-    "sports": ["Sports", "NBA", "NFL", "MLB", "Soccer", "MMA", "UFC", "Tennis"],
-    "politics": ["Politics", "Elections", "Congress"],
-    "entertainment": ["Entertainment", "Pop Culture", "Media"],
-    "science": ["Science", "Climate", "Weather"],
-    "economics": ["Economics", "Fed", "Macro"],
+    "sports": ["sports", "nba", "nfl", "mlb", "soccer", "mma", "ufc", "tennis"],
+    "politics": ["politics", "elections", "congress"],
+    "entertainment": ["entertainment", "pop culture", "media"],
+    "science": ["science", "climate", "weather", "temperature", "recurring"],
+    "economics": ["economics", "fed", "macro"],
 }
 
 # Strategy assignments per category (based on Becker 2026 research)
 CATEGORY_STRATEGIES: dict[str, list[str]] = {
     "crypto": [
-        "srb_cheap_res", "srb_cheap_x5", "srb_cheap_x10",
-        "srb_mid_res", "srb_mid_x3", "srb_mid_x5",
-        "srb_high_res", "srb_high_x2", "srb_high_x4",
+        # SRB — cheap tier
+        "srb_cheap_res", "srb_cheap_x1p3", "srb_cheap_x1p5",
+        "srb_cheap_x3", "srb_cheap_x4", "srb_cheap_x5",
+        "srb_cheap_x6", "srb_cheap_x7", "srb_cheap_x8", "srb_cheap_x9", "srb_cheap_x10",
+        "srb_cheap_x12", "srb_cheap_x15", "srb_cheap_x20", "srb_cheap_x25", "srb_cheap_x30",
+        "srb_cheap_te",
+        # SRB — mid tier
+        "srb_mid_res", "srb_mid_x1p3", "srb_mid_x1p5",
+        "srb_mid_x3", "srb_mid_x4", "srb_mid_x5",
+        "srb_mid_x6", "srb_mid_x7", "srb_mid_x8", "srb_mid_x9", "srb_mid_x10",
+        "srb_mid_x12", "srb_mid_x15", "srb_mid_x18",
+        "srb_mid_te",
+        # SRB — high tier
+        "srb_high_res", "srb_high_x1p3", "srb_high_x1p5",
+        "srb_high_x2", "srb_high_x3", "srb_high_x4", "srb_high_x5", "srb_high_x10", "srb_high_te",
+        # SRB — fat tier
+        "srb_fat_res", "srb_fat_x2", "srb_fat_x3", "srb_fat_x30", "srb_fat_x50",
+        # Volatility Spread
         "volatility_spread", "vs_x3", "vs_x4", "vs_x5",
+        # Straddle
+        "straddle_x3", "straddle_x5", "straddle_te",
+        # Contra-SRB (last-minute lottery) — all windows × all percentiles
+        "csrb_48h_2c_p50", "csrb_48h_2c_p60", "csrb_48h_2c_p70", "csrb_48h_2c_p75",
+        "csrb_48h_2c_p80", "csrb_48h_2c_p90", "csrb_48h_2c_p95", "csrb_48h_2c_p99",
+        "csrb_24h_2c_p50", "csrb_24h_2c_p60", "csrb_24h_2c_p70", "csrb_24h_2c_p75",
+        "csrb_24h_2c_p80", "csrb_24h_2c_p90", "csrb_24h_2c_p95", "csrb_24h_2c_p99",
+        "csrb_12h_2c_p50", "csrb_12h_2c_p60", "csrb_12h_2c_p70", "csrb_12h_2c_p75",
+        "csrb_12h_2c_p80", "csrb_12h_2c_p90", "csrb_12h_2c_p95", "csrb_12h_2c_p99",
+        # Time-windowed SRB (4h/6h/12h/24h/48h before resolution)
+        "srb_cheap_res_4h", "srb_cheap_res_6h", "srb_cheap_res_12h", "srb_cheap_res_24h", "srb_cheap_res_48h",
+        "srb_cheap_x5_4h", "srb_cheap_x5_6h", "srb_cheap_x5_12h", "srb_cheap_x5_24h", "srb_cheap_x5_48h",
+        "srb_cheap_x10_4h", "srb_cheap_x10_6h", "srb_cheap_x10_12h", "srb_cheap_x10_24h", "srb_cheap_x10_48h",
+        "srb_mid_res_4h", "srb_mid_res_6h", "srb_mid_res_24h", "srb_mid_res_48h",
+        "srb_mid_x5_4h", "srb_mid_x5_6h", "srb_mid_x5_12h", "srb_mid_x5_24h", "srb_mid_x5_48h",
+        "srb_mid_x10_4h", "srb_mid_x10_6h", "srb_mid_x10_12h", "srb_mid_x10_24h", "srb_mid_x10_48h",
     ],
     "sports": [
         "srb_generic_res", "srb_generic_x5", "srb_generic_x10",
@@ -77,6 +108,7 @@ CATEGORY_STRATEGIES: dict[str, list[str]] = {
         "pre_window", "pre_window_early", "pre_window_late",
         "dca", "dca_conservative",
         "political_favourite", "political_favourite_aggr", "political_favourite_cons",
+        "political_favourite_e10",
     ],
     "entertainment": [
         "srb_generic_res", "srb_generic_x5", "srb_generic_x10",
@@ -87,11 +119,18 @@ CATEGORY_STRATEGIES: dict[str, list[str]] = {
     "science": [
         "srb_generic_res", "srb_generic_x5",
         "volatility_spread",
-        "weather_fade", "weather_fade_aggr", "weather_fade_cons",
+        "weather_fade", "weather_fade_aggr", "weather_fade_cons", "weather_fade_ultra",
     ],
     "default": [
         "srb_generic_res", "srb_generic_x5",
         "volatility_spread",
+    ],
+    # "other" catches everything unclassified — include weather_fade since
+    # some weather/climate markets don't have recognizable keywords
+    "other": [
+        "srb_generic_res", "srb_generic_x5",
+        "volatility_spread",
+        "weather_fade", "weather_fade_aggr", "weather_fade_cons", "weather_fade_ultra",
     ],
 }
 
@@ -276,6 +315,10 @@ def _detect_category(pm: PolymarketMarket) -> str:
         return "politics"
     if any(w in q for w in ["oscar", "grammy", "movie", "album", "show", "celebrity"]):
         return "entertainment"
+    if any(w in q for w in ["temperature", "rainfall", "rain", "hurricane", "drought",
+                             "flood", "celsius", "fahrenheit", "precipitation", "snow",
+                             "tornado", "weather", "climate", "storm", "wind speed"]):
+        return "science"
 
     return "other"
 
@@ -386,6 +429,14 @@ class MarketScanner:
             logger.warning("quick_scan: crypto slug scan failed: %s — rolling back and continuing", exc)
             await self._db.rollback()
 
+        # Weather slugs — direct slug scan (Gamma tag=weather is broken)
+        try:
+            weather_stats = await self._scan_weather_slugs()
+            _merge_stats(stats, weather_stats)
+        except Exception as exc:
+            logger.warning("quick_scan: weather slug scan failed: %s — rolling back and continuing", exc)
+            await self._db.rollback()
+
         # Quick scan of high-priority categories (tag=API tag, category=internal key)
         for tag, category in [("Sports", "sports"), ("Politics", "politics")]:
             try:
@@ -440,6 +491,41 @@ class MarketScanner:
 
         return await self._process_markets(raw_markets, force_category="crypto")
 
+    async def _scan_weather_slugs(self) -> dict[str, int]:
+        """Scan weather temperature markets via direct slug patterns.
+
+        Gamma tag=weather is broken (returns unrelated markets). Instead we
+        construct slugs directly: highest-temperature-in-{city}-on-{month}-{day}-{year}.
+        Covers 18 cities, next 7 days.
+        """
+        _WEATHER_CITIES = [
+            "nyc", "los-angeles", "chicago", "miami", "london", "paris",
+            "tokyo", "toronto", "madrid", "seattle", "denver", "dallas",
+            "atlanta", "singapore", "hong-kong", "seoul", "houston", "san-francisco",
+        ]
+        _MONTH_SLUG = {
+            1: "january", 2: "february", 3: "march", 4: "april",
+            5: "may", 6: "june", 7: "july", 8: "august",
+            9: "september", 10: "october", 11: "november", 12: "december",
+        }
+        raw_markets: list[PolymarketMarket] = []
+        today = date.today()
+        for delta in range(0, 7):
+            target_date = today + timedelta(days=delta)
+            month_name = _MONTH_SLUG[target_date.month]
+            for city in _WEATHER_CITIES:
+                slug = f"highest-temperature-in-{city}-on-{month_name}-{target_date.day}-{target_date.year}"
+                try:
+                    results = await self._gamma.get_markets_from_event_slug(slug)
+                    if results:
+                        logger.debug("Weather slug %s: %d markets", slug, len(results))
+                    raw_markets.extend(results)
+                except Exception as exc:
+                    logger.debug("Weather slug skip %s: %s", slug, exc)
+
+        logger.info("_scan_weather_slugs: %d raw markets found", len(raw_markets))
+        return await self._process_markets(raw_markets, force_category="science")
+
     async def _scan_by_tag(
         self, tag: str, category: str, limit: int = 200
     ) -> dict[str, int]:
@@ -460,14 +546,17 @@ class MarketScanner:
         for event in raw_events:
             event_volume = _safe_float(event.get("volume") or event.get("competitionVolume"))
             event_end_date = event.get("endDate") or event.get("endDateIso")
+            event_slug = event.get("slug") or ""
             for raw_market in event.get("markets", []):
                 if isinstance(raw_market, dict):
                     try:
-                        # Inherit event-level volume/endDate if market lacks them
+                        # Inherit event-level volume/endDate/slug if market lacks them
                         if not raw_market.get("volume") and event_volume:
                             raw_market["volume"] = event_volume
                         if not raw_market.get("endDateIso") and not raw_market.get("endDate") and event_end_date:
                             raw_market["endDateIso"] = event_end_date
+                        if not raw_market.get("slug") and event_slug:
+                            raw_market["slug"] = event_slug
                         raw_markets.append(_parse_gamma_market(raw_market))
                     except Exception:
                         continue
@@ -506,10 +595,10 @@ class MarketScanner:
                 stats["skipped"] += 1
                 continue
 
-            # Detect category: always use question/tag detection except for
-            # crypto (force_category='crypto' is reliable from slug-based scan)
-            if force_category == "crypto":
-                category = "crypto"
+            # Detect category: use force_category when provided (reliable
+            # from slug/tag-based scan), fall back to question detection
+            if force_category:
+                category = force_category
             else:
                 category = _detect_category(pm)
 
@@ -556,6 +645,7 @@ class MarketScanner:
                     token_id_no=token_no,
                     status="active",
                     volume_usd=pm.volume or 0.0,
+                    slug=pm.slug or None,
                 )
                 self._db.add(market)
                 stats["new"] += 1
@@ -574,6 +664,10 @@ class MarketScanner:
                     existing.category = category
                     stats["updated"] += 1
 
+                # Backfill slug if missing
+                if not existing.slug and pm.slug:
+                    existing.slug = pm.slug
+
                 # Backfill resolution_date if missing and we have end_date_iso
                 if existing.resolution_date is None and pm.end_date_iso:
                     try:
@@ -584,7 +678,7 @@ class MarketScanner:
 
                 # Update resolution
                 changed = False
-                if pm.resolved and pm.outcome and existing.status == "active":
+                if pm.resolved and pm.outcome and existing.status in ("active", "expired"):
                     existing.status = "resolved"
                     existing.resolved_outcome = str(pm.outcome).upper()
                     if pm.end_date_iso:
@@ -664,73 +758,54 @@ class MarketScanner:
     # ------------------------------------------------------------------
 
     async def _check_resolution_for_open_positions(self) -> None:
-        """Check resolution for markets with open positions.
+        """Check resolution for ALL markets with open positions via CLOB API.
 
-        For crypto markets, resolution is detected during slug scans (range now
-        includes 3 days back).  This method handles non-crypto markets by querying
-        the Gamma events endpoint for recently-closed events and checking if any
-        of our position markets appear among them.
+        CLOB sets token.winner=True immediately when market resolves.
+        Gamma delays resolved=True for hours/days, so we skip it entirely.
         """
         from prophet.db.models import Market, Position
 
-        # Find non-crypto markets with open positions
+        # Find ALL markets with open positions that aren't yet resolved
         stmt = (
             select(Market)
             .join(Position, Position.market_id == Market.id)
             .where(
                 Position.status == "open",
-                Market.status == "active",
-                Market.category != "crypto",
+                Market.status.in_(("active", "expired")),
+                Market.resolved_outcome.is_(None),
             )
             .distinct()
         )
         result = await self._db.execute(stmt)
-        markets_with_positions = result.scalars().all()
+        all_markets = result.scalars().all()
 
-        if not markets_with_positions:
+        if not all_markets:
             return
 
-        # Build lookup by condition_id
-        market_lookup: dict[str, Any] = {m.condition_id: m for m in markets_with_positions}
-
-        logger.debug(
-            "Checking resolution for %d non-crypto markets with open positions",
-            len(markets_with_positions),
-        )
-
-        # Fetch recently-closed events from Gamma (closed=True returns resolved events)
         resolved_count = 0
-        for tag in ["Sports", "Politics", "Entertainment"]:
-            try:
-                events = await self._gamma.get_events(
-                    tag=tag, active=False, closed=True, limit=50,
-                    order="endDate", ascending=False,
-                )
-                from prophet.polymarket.gamma_client import _parse_gamma_market
-                for event in events:
-                    for raw_market in event.get("markets", []):
-                        if not isinstance(raw_market, dict):
-                            continue
-                        cid = (
-                            raw_market.get("conditionId")
-                            or raw_market.get("condition_id")
-                            or ""
+
+        # --- Use CLOB API for ALL markets (Gamma often returns NOT FOUND) ---
+        logger.debug("Checking CLOB resolution for %d markets with open positions", len(all_markets))
+        from prophet.polymarket.clob_client import PolymarketClient
+        clob = PolymarketClient()
+        await clob.start()
+        try:
+            for market in all_markets:
+                try:
+                    resolved, outcome = await clob.get_market_resolution(market.condition_id)
+                    if resolved and outcome:
+                        market.status = "resolved"
+                        market.resolved_outcome = outcome
+                        market.resolution_time = datetime.now(timezone.utc)
+                        resolved_count += 1
+                        logger.info(
+                            "Resolution confirmed (CLOB): market_id=%d %s -> %s",
+                            market.id, market.condition_id[:12], outcome,
                         )
-                        if not cid or cid not in market_lookup:
-                            continue
-                        pm = _parse_gamma_market(raw_market)
-                        if pm.resolved and pm.outcome:
-                            market = market_lookup[cid]
-                            market.status = "resolved"
-                            market.resolved_outcome = str(pm.outcome).upper()
-                            market.resolution_time = datetime.now(timezone.utc)
-                            resolved_count += 1
-                            logger.info(
-                                "Resolution confirmed (tag=%s): market_id=%d %s -> %s",
-                                tag, market.id, cid[:12], market.resolved_outcome,
-                            )
-            except Exception as exc:
-                logger.debug("_check_resolution tag=%s failed: %s", tag, exc)
+                except Exception as exc:
+                    logger.debug("CLOB resolution check failed for market %d: %s", market.id, exc)
+        finally:
+            await clob.close()
 
         if resolved_count:
             try:
@@ -738,6 +813,48 @@ class MarketScanner:
             except Exception as exc:
                 logger.error("DB flush failed during resolution check: %s", exc)
                 raise
+
+    async def handle_new_market_event(self, condition_id: str, _raw_data: dict) -> None:
+        """Handle a new_market WS event — process immediately without waiting for scan.
+
+        Uses its OWN DB session (not self._db) to avoid conflicting with a
+        concurrent full_scan or quick_scan that may be mid-transaction.
+        Falls through silently on any error (WS events are best-effort).
+        """
+        try:
+            from prophet.db.database import get_session
+            from prophet.db.models import Market
+            from sqlalchemy import select
+
+            # Fast check with own session — skip if already in DB
+            async with get_session() as check_db:
+                existing = await check_db.scalar(
+                    select(Market.id).where(Market.condition_id == condition_id)
+                )
+            if existing:
+                return
+
+            logger.info("WS new_market: fetching %s from Gamma", condition_id[:16])
+            market = await self._gamma.get_market(condition_id)
+            if not market:
+                return
+
+            # Persist with a dedicated short-lived session
+            async with get_session() as ws_db:
+                # Temporarily swap self._db so _process_markets / _auto_assign use this session
+                original_db = self._db
+                self._db = ws_db
+                try:
+                    stats = await self._process_markets([market])
+                    if stats.get("new", 0):
+                        await self._auto_assign_strategies()
+                        await ws_db.commit()
+                        logger.info("WS new_market: persisted condition=%s", condition_id[:16])
+                finally:
+                    self._db = original_db
+
+        except Exception as exc:
+            logger.warning("handle_new_market_event failed for %s: %s", condition_id[:16], exc)
 
     async def _get_market_by_condition_id(self, condition_id: str) -> Any | None:
         from prophet.db.models import Market

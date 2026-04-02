@@ -121,6 +121,31 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # Live trading limits (only used when paper_trading=False)
+    # ------------------------------------------------------------------
+
+    live_max_daily_usd: float = Field(
+        default=50.0,
+        description="Max total USD deployed per day across all live positions.",
+    )
+    live_max_open_positions: int = Field(
+        default=20,
+        description="Max simultaneous open live positions.",
+    )
+    live_per_strategy_max_usd: float = Field(
+        default=20.0,
+        description="Max USD deployed per strategy per day.",
+    )
+    live_max_single_order_usd: float = Field(
+        default=10.0,
+        description="Max USD size for a single live order.",
+    )
+    live_strategies: list[str] = Field(
+        default=["srb_cheap_x5", "srb_cheap_x10", "srb_mid_x3"],
+        description="Whitelist of strategy names allowed to trade live.",
+    )
+
+    # ------------------------------------------------------------------
     # Scanner
     # ------------------------------------------------------------------
 

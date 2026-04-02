@@ -271,10 +271,14 @@ class PriceFeedService:
         if not binance_symbols:
             return {}
 
-        params: dict[str, Any] = {"symbols": json.dumps(binance_symbols)}
+        # Binance requires the JSON array WITHOUT spaces: ["BTCUSDT","ETHUSDT"]
+        # json.dumps adds spaces and httpx double-encodes brackets, so build
+        # the query string manually.
+        symbols_json = "[" + ",".join(f'"{s}"' for s in binance_symbols) + "]"
+        url = f"{BINANCE_TICKER_URL}?symbols={symbols_json}"
         ts = _utcnow()
 
-        data = await _safe_get(self._http, BINANCE_TICKER_URL, params)
+        data = await _safe_get(self._http, url)
         if data is None:
             logger.warning("Binance price fetch returned no data")
             return {}

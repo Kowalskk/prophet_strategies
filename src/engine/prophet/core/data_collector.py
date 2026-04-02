@@ -69,17 +69,19 @@ class DataCollector:
                 return {}
 
     async def collect_orderbooks(self) -> int:
-        """Snapshot order books for all active markets."""
+        """Snapshot order books for all active markets using batch API.
+
+        Uses ``POST /books`` to fetch order books in bulk instead of one-by-one,
+        reducing ~3600 HTTP calls to ~72 batch calls (50 tokens per batch).
+        """
         from prophet.db.database import get_session_factory
-        from prophet.polymarket.orderbook import OrderBookService
+        from prophet.polymarket.orderbook import compute_metrics
+        from prophet.db.models import Market, OrderBookSnapshot
         from sqlalchemy import select
 
         sf = get_session_factory()
         async with sf() as session:
             try:
-                from prophet.db.models import Market
-                # Snapshot crypto markets fully + top 50 non-crypto by volume.
-                # Running 1393 markets serially causes jobs to overlap → "Session is already flushing".
                 crypto_result = await session.execute(
                     select(Market).where(
                         Market.status == "active",
@@ -91,8 +93,8 @@ class DataCollector:
                         Market.status == "active",
                         Market.category != "crypto",
                         Market.category.isnot(None),
-                        Market.volume_usd >= 30000,
-                    ).order_by(Market.volume_usd.desc()).limit(300)
+                        Market.volume_usd >= 1000,
+                    ).order_by(Market.volume_usd.desc()).limit(1500)
                 )
                 markets = list(crypto_result.scalars().all()) + list(non_crypto_result.scalars().all())
             except Exception as exc:
@@ -102,26 +104,53 @@ class DataCollector:
             if not markets:
                 return 0
 
-            ob_service = OrderBookService(
-                clob_client=self._clob,
-                db_session=session,
-                redis_client=self._redis,
+            # Build token_id → (market_id, side) mapping for all markets
+            token_map: dict[str, tuple[int, str]] = {}
+            all_token_ids: list[str] = []
+            for market in markets:
+                if market.token_id_yes:
+                    token_map[market.token_id_yes] = (market.id, "yes")
+                    all_token_ids.append(market.token_id_yes)
+                if market.token_id_no:
+                    token_map[market.token_id_no] = (market.id, "no")
+                    all_token_ids.append(market.token_id_no)
+
+            logger.info(
+                "collect_orderbooks: fetching %d tokens (%d markets) via batch API",
+                len(all_token_ids), len(markets),
             )
 
-            processed = 0
-            for market in markets:
-                try:
-                    await ob_service.snapshot_both_sides(
-                        market_id=market.id,
-                        token_id_yes=market.token_id_yes,
-                        token_id_no=market.token_id_no,
-                    )
-                    processed += 1
-                except Exception as exc:
-                    logger.error(
-                        "collect_orderbooks: failed for market_id=%d %s: %s",
-                        market.id, market.condition_id[:12], exc,
-                    )
+            # Batch fetch all order books
+            books = await self._clob.get_order_books_batch(all_token_ids)
+
+            # Persist snapshots
+            processed_markets: set[int] = set()
+            now = _utcnow()
+            for tid, book in books.items():
+                mapping = token_map.get(tid)
+                if not mapping:
+                    continue
+                market_id, side = mapping
+                book = compute_metrics(book)
+
+                raw_book = {
+                    "bids": [{"price": l.price, "size": l.size} for l in book.bids],
+                    "asks": [{"price": l.price, "size": l.size} for l in book.asks],
+                }
+                snapshot = OrderBookSnapshot(
+                    market_id=market_id,
+                    token_id=tid,
+                    side=side,
+                    timestamp=now,
+                    best_bid=book.best_bid,
+                    best_ask=book.best_ask,
+                    bid_depth_10pct=book.bid_depth_10pct,
+                    ask_depth_10pct=book.ask_depth_10pct,
+                    spread_pct=book.spread_pct,
+                    raw_book=raw_book,
+                )
+                session.add(snapshot)
+                processed_markets.add(market_id)
 
             try:
                 await session.commit()
@@ -129,33 +158,62 @@ class DataCollector:
                 logger.error("collect_orderbooks: commit failed: %s", exc)
                 await session.rollback()
 
+            processed = len(processed_markets)
+            skipped = len(markets) - processed
             logger.info(
-                "collect_orderbooks: snapshotted %d/%d markets", processed, len(markets)
+                "collect_orderbooks: snapshotted %d/%d markets (%d skipped — no OB on CLOB)",
+                processed, len(markets), skipped,
             )
             return processed
 
+    # Rolling index so each 2-min cycle processes a different slice of markets
+    _trades_offset: int = 0
+    _TRADES_PAGE: int = 50  # markets per cycle — keeps each run well under 2 min
+
     async def collect_trades(self) -> int:
-        """Fetch and persist recent trades for all active markets."""
+        """Fetch and persist recent trades for markets with open positions.
+
+        Processes _TRADES_PAGE markets per cycle in round-robin order so the
+        job always finishes within the 2-min scheduler window, even with 600+
+        markets. Full rotation completes every ~24 min (600/50 × 2 min).
+        Uses the Data API (no auth required).
+        """
         from prophet.db.database import get_session_factory
         from sqlalchemy import select
 
         sf = get_session_factory()
         async with sf() as session:
             try:
-                from prophet.db.models import Market
-                result = await session.execute(
-                    select(Market).where(Market.status == "active")
+                from prophet.db.models import Market, Position
+                market_ids_with_positions = (
+                    select(Position.market_id)
+                    .where(Position.status == "open")
+                    .distinct()
+                    .scalar_subquery()
                 )
-                markets = list(result.scalars().all())
+                result = await session.execute(
+                    select(Market)
+                    .where(
+                        Market.status == "active",
+                        Market.id.in_(market_ids_with_positions),
+                    )
+                    .order_by(Market.id)
+                )
+                all_markets = list(result.scalars().all())
             except Exception as exc:
                 logger.error("collect_trades: failed to load markets: %s", exc)
                 return 0
 
-            if not markets:
+            if not all_markets:
                 return 0
 
+            # Slice this cycle's page using rolling offset
+            offset = self.__class__._trades_offset % len(all_markets)
+            page = (all_markets + all_markets)[offset: offset + self._TRADES_PAGE]
+            self.__class__._trades_offset = (offset + self._TRADES_PAGE) % len(all_markets)
+
             total_trades = 0
-            for market in markets:
+            for market in page:
                 try:
                     count = await self._collect_trades_for_market(session, market)
                     total_trades += count
@@ -171,9 +229,9 @@ class DataCollector:
                     logger.error("collect_trades: commit failed: %s", exc)
                     await session.rollback()
 
-            logger.info(
-                "collect_trades: persisted %d trade(s) across %d markets",
-                total_trades, len(markets),
+            logger.debug(
+                "collect_trades: %d trades across %d/%d markets (offset=%d)",
+                total_trades, len(page), len(all_markets), offset,
             )
             return total_trades
 

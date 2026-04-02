@@ -86,8 +86,8 @@ class PoliticalFavouriteStrategy(StrategyBase):
         "capital_per_signal": 40.0, # USD per trade
         "min_hours_to_close": 6,    # skip markets resolving too soon
         "max_hours_to_close": 720,  # skip markets >1 month out (less reliable)
-        "exit_strategy": "sell_at_target",
-        "sell_target_pct": 50.0,    # sell when price rises ~50% of the edge
+        "exit_strategy": "hold_to_resolution",
+        "sell_target_pct": 0,       # hold to resolution — the edge IS the resolution prob
     }
 
     async def evaluate(
@@ -220,10 +220,19 @@ class PoliticalFavouriteConservative(PoliticalFavouriteStrategy):
         "min_edge": 0.08, "capital_per_signal": 25.0}
 
 
+class PoliticalFavouriteEdge10(PoliticalFavouriteStrategy):
+    """Only enter when edge >= 10¢ — sweet spot from simulation (+14% ROI)."""
+    name = "political_favourite_e10"
+    description = "Political favourite: min_edge 10¢, hold_to_resolution. Best simulated ROI."
+    default_params = {**PoliticalFavouriteStrategy.default_params,
+        "min_edge": 0.10, "capital_per_signal": 40.0}
+
+
 ALL_POLITICAL_FAVOURITE_CLASSES = [
     PoliticalFavouriteStrategy,
     PoliticalFavouriteAggressive,
     PoliticalFavouriteConservative,
+    PoliticalFavouriteEdge10,
 ]
 
 

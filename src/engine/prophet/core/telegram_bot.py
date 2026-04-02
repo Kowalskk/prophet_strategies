@@ -1,21 +1,11 @@
 """
-Telegram Bot — on-demand commands + smart alerts (no spam).
+Telegram Bot — on-demand commands via inline buttons + smart alerts.
 
 Notifications (automatic, filtered)
 ------------------------------------
 - Daily summary at 20:00 UTC
-- Trade closed only if |PnL| > threshold (skip tiny wins/losses)
+- Trade closed only if |PnL| > threshold
 - Critical errors only
-
-Commands (on-demand, via polling)
----------------------------------
-- /status  — engine health, uptime, last scan time
-- /pnl     — total PnL, today, this week, win rate
-- /strategies — top 10 strategies ranked by PnL
-- /positions  — open positions, exposure, biggest positions
-- /markets    — markets scanned per category
-- /signals    — signals generated today + approval rate
-- /help       — list all commands
 
 Configuration (env vars)
 ------------------------
@@ -40,13 +30,34 @@ _CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 _BASE_URL = "https://api.telegram.org/bot{token}"
 _TIMEOUT = 10.0
 
-# Only notify trades with PnL above these thresholds
-_NOTIFY_WIN_THRESHOLD = 5.0    # notify wins > $5
-_NOTIFY_LOSS_THRESHOLD = -10.0  # notify losses < -$10
+_NOTIFY_WIN_THRESHOLD = 5.0
+_NOTIFY_LOSS_THRESHOLD = -10.0
+
+# Main menu inline keyboard
+_MAIN_MENU = {
+    "inline_keyboard": [
+        [
+            {"text": "📊 PnL", "callback_data": "pnl"},
+            {"text": "🔄 Status", "callback_data": "status"},
+        ],
+        [
+            {"text": "📈 Strategies", "callback_data": "strategies"},
+            {"text": "💼 Positions", "callback_data": "positions"},
+        ],
+        [
+            {"text": "⏱ Countdown", "callback_data": "countdown"},
+            {"text": "💰 Prices", "callback_data": "prices"},
+        ],
+        [
+            {"text": "📡 Signals", "callback_data": "signals"},
+            {"text": "🗺 Markets", "callback_data": "markets"},
+        ],
+    ]
+}
 
 
 class TelegramNotifier:
-    """Async Telegram bot with command polling + smart alerts."""
+    """Async Telegram bot with inline button menu + smart alerts."""
 
     def __init__(self, bot_token: str = "", chat_id: str = "") -> None:
         self.bot_token = bot_token or _BOT_TOKEN
@@ -83,19 +94,26 @@ class TelegramNotifier:
     # Low-level send
     # ------------------------------------------------------------------
 
-    async def _send(self, text: str, parse_mode: str = "HTML") -> bool:
+    async def _send(
+        self,
+        text: str,
+        parse_mode: str = "HTML",
+        reply_markup: dict | None = None,
+    ) -> bool:
         if not self._enabled:
             return False
         if self._client is None:
             await self.start()
 
         url = f"{_BASE_URL.format(token=self.bot_token)}/sendMessage"
-        payload = {
+        payload: dict[str, Any] = {
             "chat_id": self.chat_id,
             "text": text,
             "parse_mode": parse_mode,
             "disable_web_page_preview": True,
         }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         try:
             resp = await self._client.post(url, json=payload)  # type: ignore[union-attr]
             if resp.status_code != 200:
@@ -106,12 +124,21 @@ class TelegramNotifier:
             logger.warning("Telegram send error: %s", exc)
             return False
 
+    async def _answer_callback(self, callback_query_id: str) -> None:
+        """Acknowledge the button tap so the loading spinner disappears."""
+        if not self._enabled or self._client is None:
+            return
+        url = f"{_BASE_URL.format(token=self.bot_token)}/answerCallbackQuery"
+        try:
+            await self._client.post(url, json={"callback_query_id": callback_query_id})
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
-    # Command polling
+    # Command polling (messages + callback queries)
     # ------------------------------------------------------------------
 
     async def _poll_commands(self) -> None:
-        """Long-poll Telegram for incoming commands."""
         while True:
             try:
                 url = f"{_BASE_URL.format(token=self.bot_token)}/getUpdates"
@@ -124,17 +151,31 @@ class TelegramNotifier:
                 data = resp.json()
                 for update in data.get("result", []):
                     self._last_update_id = update["update_id"]
+
+                    # Inline button tap
+                    cbq = update.get("callback_query")
+                    if cbq:
+                        cid = str(cbq.get("message", {}).get("chat", {}).get("id", ""))
+                        if cid == self.chat_id:
+                            await self._answer_callback(cbq["id"])
+                            await self._handle_action(cbq.get("data", ""))
+                        continue
+
+                    # Text message / command
                     msg = update.get("message", {})
                     text = msg.get("text", "")
-                    chat_id = str(msg.get("chat", {}).get("id", ""))
-
-                    # Only respond to our chat
-                    if chat_id != self.chat_id:
+                    cid = str(msg.get("chat", {}).get("id", ""))
+                    if cid != self.chat_id:
                         continue
 
                     if text.startswith("/"):
-                        cmd = text.split()[0].lower().split("@")[0]  # strip @botname
-                        await self._handle_command(cmd)
+                        cmd = text.split()[0].lower().split("@")[0]
+                        # Map slash commands to action names
+                        action = cmd.lstrip("/")
+                        if action in ("start", "help", "menu"):
+                            await self._cmd_menu()
+                        else:
+                            await self._handle_action(action)
 
             except asyncio.CancelledError:
                 return
@@ -142,54 +183,50 @@ class TelegramNotifier:
                 logger.debug("Telegram poll error: %s", exc)
                 await asyncio.sleep(10)
 
-    async def _handle_command(self, cmd: str) -> None:
+    async def _handle_action(self, action: str) -> None:
         handlers = {
-            "/start": self._cmd_help,
-            "/help": self._cmd_help,
-            "/status": self._cmd_status,
-            "/pnl": self._cmd_pnl,
-            "/strategies": self._cmd_strategies,
-            "/positions": self._cmd_positions,
-            "/markets": self._cmd_markets,
-            "/signals": self._cmd_signals,
+            "status": self._cmd_status,
+            "pnl": self._cmd_pnl,
+            "strategies": self._cmd_strategies,
+            "positions": self._cmd_positions,
+            "markets": self._cmd_markets,
+            "signals": self._cmd_signals,
+            "countdown": self._cmd_countdown,
+            "prices": self._cmd_prices,
+            "menu": self._cmd_menu,
         }
-        handler = handlers.get(cmd)
+        handler = handlers.get(action)
         if handler:
             try:
                 await handler()
             except Exception as exc:
-                await self._send(f"Error ejecutando {cmd}: {_escape(str(exc)[:200])}")
+                await self._send(f"Error en {action}: {_escape(str(exc)[:200])}")
         else:
-            await self._send(f"Comando desconocido: {cmd}\nUsa /help para ver comandos.")
+            await self._cmd_menu()
 
     # ------------------------------------------------------------------
     # Command handlers
     # ------------------------------------------------------------------
 
-    async def _cmd_help(self) -> None:
+    async def _cmd_menu(self) -> None:
         await self._send(
-            "<b>Prophet Engine Commands</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "/status — Engine health + uptime\n"
-            "/pnl — PnL total, hoy, semana, win rate\n"
-            "/strategies — Top 10 strategies por PnL\n"
-            "/positions — Posiciones abiertas + exposicion\n"
-            "/markets — Mercados por categoria\n"
-            "/signals — Senales generadas hoy\n"
-            "/help — Este mensaje"
+            "<b>Prophet Engine</b> — elige una opcion:",
+            reply_markup=_MAIN_MENU,
         )
 
     async def _cmd_status(self) -> None:
         from prophet.db.database import get_session
-        from prophet.db.models import Market, Position, OrderBookSnapshot
+        from prophet.db.models import Market, Position, Signal, OrderBookSnapshot
         from sqlalchemy import func, select
 
-        uptime = ""
+        uptime = "?"
         if self._start_time:
             delta = datetime.now(timezone.utc) - self._start_time
-            hours = int(delta.total_seconds() // 3600)
-            mins = int((delta.total_seconds() % 3600) // 60)
-            uptime = f"{hours}h {mins}m"
+            h = int(delta.total_seconds() // 3600)
+            m = int((delta.total_seconds() % 3600) // 60)
+            uptime = f"{h}h {m}m"
+
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
         async with get_session() as db:
             active_markets = (await db.execute(
@@ -200,20 +237,25 @@ class TelegramNotifier:
                 select(func.count()).select_from(Position).where(Position.status == "open")
             )).scalar_one() or 0
 
-            # Last OB snapshot as proxy for "last data collection"
+            signals_today = (await db.execute(
+                select(func.count()).select_from(Signal).where(Signal.created_at >= today_start)
+            )).scalar_one() or 0
+
             last_ob = (await db.execute(
                 select(func.max(OrderBookSnapshot.timestamp))
             )).scalar_one_or_none()
             last_data = str(last_ob)[:19] if last_ob else "never"
 
         await self._send(
-            "<b>Engine Status</b>\n"
+            "<b>🔄 Engine Status</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
             f"Uptime: {uptime}\n"
-            f"Active markets: {active_markets}\n"
-            f"Open positions: {open_positions}\n"
-            f"Last data: {last_data}\n"
-            f"Bot: online"
+            f"Mercados activos: {active_markets:,}\n"
+            f"Posiciones abiertas: {open_positions:,}\n"
+            f"Señales hoy: {signals_today:,}\n"
+            f"Última data: {last_data} UTC\n"
+            f"Bot: 🟢 online",
+            reply_markup=_MAIN_MENU,
         )
 
     async def _cmd_pnl(self) -> None:
@@ -226,59 +268,59 @@ class TelegramNotifier:
         week_start = today_start - timedelta(days=now.weekday())
 
         async with get_session() as db:
-            # Total PnL
             total = (await db.execute(
                 select(func.sum(Position.net_pnl)).where(Position.status == "closed")
             )).scalar_one_or_none() or 0.0
 
-            # Today
             today = (await db.execute(
                 select(func.sum(Position.net_pnl)).where(
                     Position.status == "closed", Position.closed_at >= today_start)
             )).scalar_one_or_none() or 0.0
 
-            # This week
             week = (await db.execute(
                 select(func.sum(Position.net_pnl)).where(
                     Position.status == "closed", Position.closed_at >= week_start)
             )).scalar_one_or_none() or 0.0
 
-            # Win rate
             total_closed = (await db.execute(
                 select(func.count()).select_from(Position).where(Position.status == "closed")
             )).scalar_one() or 0
+
             wins = (await db.execute(
                 select(func.count()).select_from(Position).where(
                     Position.status == "closed", Position.net_pnl > 0)
             )).scalar_one() or 0
+
             wr = (wins / total_closed * 100) if total_closed > 0 else 0.0
 
-            # Best single trade
             best = (await db.execute(
                 select(Position.strategy, Position.net_pnl)
                 .where(Position.status == "closed")
                 .order_by(Position.net_pnl.desc()).limit(1)
             )).first()
-            best_str = f"{best[0]}: +${best[1]:.2f}" if best and best[1] else "n/a"
 
-            # Worst single trade
             worst = (await db.execute(
                 select(Position.strategy, Position.net_pnl)
                 .where(Position.status == "closed")
                 .order_by(Position.net_pnl.asc()).limit(1)
             )).first()
-            worst_str = f"{worst[0]}: ${worst[1]:.2f}" if worst and worst[1] else "n/a"
 
-        s = lambda v: ("+" if v >= 0 else "") + f"${v:.2f}"
+        def _s(v: float) -> str:
+            return ("+" if v >= 0 else "") + f"${v:.2f}"
+
+        best_str = f"{best[0]}: +${best[1]:.2f}" if best and best[1] else "n/a"
+        worst_str = f"{worst[0]}: ${worst[1]:.2f}" if worst and worst[1] else "n/a"
+
         await self._send(
-            "<b>PnL Report</b>\n"
+            "<b>📊 PnL Report</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            f"Total: <b>{s(total)}</b>\n"
-            f"Hoy: {s(today)}\n"
-            f"Semana: {s(week)}\n"
+            f"Total: <b>{_s(total)}</b>\n"
+            f"Hoy: {_s(today)}\n"
+            f"Semana: {_s(week)}\n"
             f"Win rate: {wr:.1f}% ({wins}/{total_closed})\n"
-            f"Mejor trade: {best_str}\n"
-            f"Peor trade: {worst_str}"
+            f"Mejor trade: {_escape(best_str)}\n"
+            f"Peor trade: {_escape(worst_str)}",
+            reply_markup=_MAIN_MENU,
         )
 
     async def _cmd_strategies(self) -> None:
@@ -287,7 +329,8 @@ class TelegramNotifier:
         from sqlalchemy import func, select, case
 
         async with get_session() as db:
-            stmt = (
+            # Top 10 by closed PnL
+            rows = (await db.execute(
                 select(
                     Position.strategy,
                     func.sum(Position.net_pnl).label("pnl"),
@@ -298,26 +341,49 @@ class TelegramNotifier:
                 .group_by(Position.strategy)
                 .order_by(func.sum(Position.net_pnl).desc())
                 .limit(10)
-            )
-            rows = (await db.execute(stmt)).all()
+            )).all()
+
+            # Open positions by strategy family
+            open_by_family = (await db.execute(
+                select(Position.strategy, func.count().label("cnt"))
+                .where(Position.status == "open")
+                .group_by(Position.strategy)
+                .order_by(func.count().desc())
+                .limit(8)
+            )).all()
 
         if not rows:
-            await self._send("No hay trades cerrados todavia.")
+            await self._send(
+                "<b>📈 Strategies</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "No hay trades cerrados todavia.\n\n"
+                "<i>Estrategias activas: SRB (cheap/mid + 12h/24h/48h), CSRB, VS, Political, Weather</i>",
+                reply_markup=_MAIN_MENU,
+            )
             return
 
         lines = []
-        for i, row in enumerate(rows, 1):
-            name, pnl, trades, w = row
+        for i, (name, pnl, trades, w) in enumerate(rows, 1):
             wr = (w / trades * 100) if trades > 0 else 0
             s = "+" if pnl >= 0 else ""
             emoji = "🟢" if pnl >= 0 else "🔴"
-            lines.append(f"{emoji} {i}. <code>{name}</code>\n"
-                         f"    {s}${pnl:.2f} | {trades} trades | WR {wr:.0f}%")
+            lines.append(
+                f"{emoji} {i}. <code>{name}</code>\n"
+                f"   {s}${pnl:.2f} | {trades}t | {wr:.0f}% WR"
+            )
+
+        open_lines = ""
+        if open_by_family:
+            open_lines = "\n<b>Abiertas por estrategia:</b>\n"
+            for name, cnt in open_by_family:
+                open_lines += f"  <code>{name}</code>: {cnt}\n"
 
         await self._send(
-            "<b>Top 10 Strategies</b>\n"
+            "<b>📈 Top 10 Strategies (closed)</b>\n"
             "━━━━━━━━━━━━━━━━━━\n" +
-            "\n".join(lines)
+            "\n".join(lines) +
+            open_lines,
+            reply_markup=_MAIN_MENU,
         )
 
     async def _cmd_positions(self) -> None:
@@ -326,7 +392,6 @@ class TelegramNotifier:
         from sqlalchemy import func, select
 
         async with get_session() as db:
-            # Open positions count + exposure
             open_count = (await db.execute(
                 select(func.count()).select_from(Position).where(Position.status == "open")
             )).scalar_one() or 0
@@ -335,19 +400,17 @@ class TelegramNotifier:
                 select(func.sum(Position.size_usd)).where(Position.status == "open")
             )).scalar_one_or_none() or 0.0
 
-            # By strategy
             by_strat = (await db.execute(
                 select(Position.strategy, func.count(), func.sum(Position.size_usd))
                 .where(Position.status == "open")
                 .group_by(Position.strategy)
-                .order_by(func.sum(Position.size_usd).desc())
-                .limit(5)
+                .order_by(func.count().desc())
+                .limit(8)
             )).all()
 
-            # Biggest positions
             biggest = (await db.execute(
-                select(Position.strategy, Position.side, Position.size_usd, Position.entry_price,
-                       Market.question)
+                select(Position.strategy, Position.side, Position.size_usd,
+                       Position.entry_price, Market.question)
                 .join(Market, Market.id == Position.market_id)
                 .where(Position.status == "open")
                 .order_by(Position.size_usd.desc())
@@ -356,19 +419,20 @@ class TelegramNotifier:
 
         strat_lines = ""
         for name, cnt, sz in by_strat:
-            strat_lines += f"  <code>{name}</code>: {cnt} pos (${sz:.0f})\n"
+            strat_lines += f"  <code>{name}</code>: {cnt} (${sz:.0f})\n"
 
         big_lines = ""
         for strat, side, sz, ep, q in biggest:
-            big_lines += f"  {side} ${sz:.0f}@{ep:.3f} — {_escape((q or '?')[:50])}\n"
+            big_lines += f"  {side} ${sz:.0f}@{ep:.3f} — {_escape((q or '?')[:45])}\n"
 
         await self._send(
-            "<b>Open Positions</b>\n"
+            "<b>💼 Open Positions</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            f"Total: {open_count} positions\n"
-            f"Exposure: ${exposure:.2f}\n\n"
-            f"<b>By strategy:</b>\n{strat_lines}\n"
-            f"<b>Biggest:</b>\n{big_lines}"
+            f"Total: <b>{open_count:,}</b> posiciones\n"
+            f"Exposicion: <b>${exposure:,.2f}</b>\n\n"
+            f"<b>Por estrategia:</b>\n{strat_lines}\n"
+            f"<b>Mayores posiciones:</b>\n{big_lines}",
+            reply_markup=_MAIN_MENU,
         )
 
     async def _cmd_markets(self) -> None:
@@ -377,27 +441,25 @@ class TelegramNotifier:
         from sqlalchemy import func, select, text
 
         async with get_session() as db:
-            result = await db.execute(text(
-                "SELECT coalesce(category, 'unknown') as cat, "
+            rows = (await db.execute(text(
+                "SELECT coalesce(category,'unknown') as cat, "
                 "count(*) as total, "
-                "sum(case when status = 'active' then 1 else 0 end) as active "
-                "FROM markets GROUP BY coalesce(category, 'unknown') ORDER BY count(*) DESC"
-            ))
-            rows = result.all()
+                "sum(case when status='active' then 1 else 0 end) as active "
+                "FROM markets GROUP BY coalesce(category,'unknown') ORDER BY count(*) DESC"
+            ))).all()
 
             total = (await db.execute(
                 select(func.count()).select_from(Market)
             )).scalar_one() or 0
 
-        lines = []
-        for cat, cnt, active in rows:
-            lines.append(f"  {cat}: {cnt} ({active or 0} active)")
+        lines = [f"  {cat}: {cnt:,} ({active or 0} activos)" for cat, cnt, active in rows]
 
         await self._send(
-            "<b>Markets by Category</b>\n"
+            "<b>🗺 Markets by Category</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            f"Total: {total}\n\n" +
-            "\n".join(lines)
+            f"Total: {total:,}\n\n" +
+            "\n".join(lines),
+            reply_markup=_MAIN_MENU,
         )
 
     async def _cmd_signals(self) -> None:
@@ -405,51 +467,137 @@ class TelegramNotifier:
         from prophet.db.models import Signal
         from sqlalchemy import func, select
 
-        today_start = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
         async with get_session() as db:
-            # Total signals today
             total = (await db.execute(
-                select(func.count()).select_from(Signal)
-                .where(Signal.created_at >= today_start)
+                select(func.count()).select_from(Signal).where(Signal.created_at >= today_start)
             )).scalar_one() or 0
 
-            # By status
             by_status = (await db.execute(
                 select(Signal.status, func.count())
                 .where(Signal.created_at >= today_start)
                 .group_by(Signal.status)
             )).all()
 
-            # By strategy (top 5)
             by_strat = (await db.execute(
                 select(Signal.strategy, func.count())
                 .where(Signal.created_at >= today_start)
                 .group_by(Signal.strategy)
                 .order_by(func.count().desc())
-                .limit(5)
+                .limit(8)
             )).all()
 
-        status_lines = ""
-        for st, cnt in by_status:
-            status_lines += f"  {st}: {cnt}\n"
-
-        strat_lines = ""
-        for name, cnt in by_strat:
-            strat_lines += f"  <code>{name}</code>: {cnt}\n"
+        status_lines = "".join(f"  {st}: {cnt}\n" for st, cnt in by_status)
+        strat_lines = "".join(f"  <code>{name}</code>: {cnt}\n" for name, cnt in by_strat)
 
         await self._send(
-            "<b>Signals Today</b>\n"
+            "<b>📡 Signals Today</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            f"Total: {total}\n\n"
-            f"<b>By status:</b>\n{status_lines}\n"
-            f"<b>Top strategies:</b>\n{strat_lines}"
+            f"Total: <b>{total:,}</b>\n\n"
+            f"<b>Por estado:</b>\n{status_lines}\n"
+            f"<b>Top estrategias:</b>\n{strat_lines}",
+            reply_markup=_MAIN_MENU,
+        )
+
+    async def _cmd_countdown(self) -> None:
+        from prophet.db.database import get_session
+        from sqlalchemy import text
+
+        async with get_session() as db:
+            rows = (await db.execute(text("""
+                SELECT
+                    m.resolution_date,
+                    COUNT(DISTINCT m.id)              AS markets,
+                    COUNT(p.id)                       AS positions,
+                    ROUND(SUM(p.size_usd)::numeric,2) AS capital
+                FROM positions p
+                JOIN markets m ON p.market_id = m.id
+                WHERE p.status = 'open'
+                  AND m.resolution_date IS NOT NULL
+                GROUP BY m.resolution_date
+                ORDER BY m.resolution_date ASC
+            """))).all()
+
+        if not rows:
+            await self._send(
+                "No hay posiciones abiertas con fecha de resolución.",
+                reply_markup=_MAIN_MENU,
+            )
+            return
+
+        now = datetime.now(timezone.utc)
+        lines = []
+
+        for res_date, markets, positions, capital in rows:
+            target = datetime(res_date.year, res_date.month, res_date.day,
+                              23, 59, 59, tzinfo=timezone.utc)
+            secs = int((target - now).total_seconds())
+            days = secs // 86400
+            hours = (secs % 86400) // 3600
+            mins = (secs % 3600) // 60
+
+            if secs < 0:
+                countdown = "EXPIRADO ⚠️"
+                tag = ""
+            elif days == 0:
+                countdown = f"HOY — {hours:02d}h {mins:02d}m"
+                tag = " 🔥"
+            elif days <= 3:
+                countdown = f"{days}d {hours:02d}h"
+                tag = " ⏳"
+            else:
+                countdown = f"{days}d"
+                tag = ""
+
+            lines.append(
+                f"<b>{res_date}{tag}</b> — {countdown}\n"
+                f"  {markets} mkt | {positions} pos | ${float(capital):,.0f}"
+            )
+
+        total_pos = sum(r[2] for r in rows)
+        total_cap = sum(float(r[3]) for r in rows)
+
+        await self._send(
+            "<b>⏱ Market Countdown</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n" +
+            "\n".join(lines) +
+            f"\n━━━━━━━━━━━━━━━━━━\n"
+            f"Total: {total_pos:,} pos | ${total_cap:,.0f}",
+            reply_markup=_MAIN_MENU,
+        )
+
+    async def _cmd_prices(self) -> None:
+        from prophet.db.database import get_session
+        from sqlalchemy import text
+
+        async with get_session() as db:
+            rows = (await db.execute(text(
+                "SELECT crypto, price_usd, timestamp "
+                "FROM price_snapshots "
+                "WHERE (crypto, timestamp) IN ("
+                "  SELECT crypto, MAX(timestamp) FROM price_snapshots GROUP BY crypto"
+                ") "
+                "ORDER BY crypto"
+            ))).all()
+
+        if not rows:
+            await self._send("No hay datos de precios disponibles.", reply_markup=_MAIN_MENU)
+            return
+
+        lines = []
+        for crypto, price, ts in rows:
+            lines.append(f"  <b>{crypto}</b>: ${price:,.2f} <i>({str(ts)[:16]})</i>")
+
+        await self._send(
+            "<b>💰 Crypto Prices</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n" +
+            "\n".join(lines),
+            reply_markup=_MAIN_MENU,
         )
 
     # ------------------------------------------------------------------
-    # Smart alerts (filtered, no spam)
+    # Smart alerts
     # ------------------------------------------------------------------
 
     async def notify_trade_closed(
@@ -461,33 +609,35 @@ class TelegramNotifier:
         exit_price: float,
         net_pnl: float,
         exit_reason: str,
+        market_url: str = "",
     ) -> None:
-        """Only notify significant trades (wins > $5 or losses > $10)."""
+        """Only notify significant trades."""
         if _NOTIFY_LOSS_THRESHOLD < net_pnl < _NOTIFY_WIN_THRESHOLD:
-            return  # skip small trades
+            return
 
         emoji = "✅" if net_pnl >= 0 else "🔴"
         pnl_sign = "+" if net_pnl >= 0 else ""
-        text = (
+        market_line = _escape(market_question[:80])
+        if market_url:
+            market_line = f'<a href="{market_url}">{market_line}</a>'
+
+        await self._send(
             f"{emoji} <b>TRADE CLOSED</b>\n"
-            f"<code>{strategy}</code>\n"
-            f"{_escape(market_question[:80])}\n"
+            f"<code>{_escape(strategy)}</code>\n"
+            f"{market_line}\n"
             f"{side} | {entry_price:.4f} → {exit_price:.4f}\n"
-            f"PnL: <b>{pnl_sign}${net_pnl:.2f}</b> ({exit_reason})"
+            f"PnL: <b>{pnl_sign}${net_pnl:.2f}</b> ({_escape(exit_reason)})"
         )
-        await self._send(text)
 
     async def notify_error(self, component: str, error_msg: str) -> None:
-        """Alert on critical errors only."""
-        text = (
+        await self._send(
             f"⚠️ <b>ERROR</b>\n"
-            f"<code>{component}</code>\n"
+            f"<code>{_escape(component)}</code>\n"
             f"{_escape(error_msg[:300])}"
         )
-        await self._send(text)
 
     # ------------------------------------------------------------------
-    # Daily summary (scheduled at 20:00 UTC)
+    # Daily summary (called by scheduler at 20:00 UTC)
     # ------------------------------------------------------------------
 
     async def send_daily_summary(self, stats: dict[str, Any]) -> None:
@@ -509,11 +659,12 @@ class TelegramNotifier:
             f"Total PnL: <b>{s_total}</b>\n"
             f"Hoy: {s_today}\n"
             f"Win Rate: {wr:.1f}%\n"
-            f"Open: {stats.get('open_positions', 0)} pos\n"
-            f"Cerrados hoy: {stats.get('closed_today', 0)}\n"
-            f"Exposicion: ${stats.get('total_exposure_usd', 0):.2f}\n"
+            f"Abiertas: {stats.get('open_positions', 0):,} pos\n"
+            f"Cerradas hoy: {stats.get('closed_today', 0):,}\n"
+            f"Exposición: ${stats.get('total_exposure_usd', 0):,.2f}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"<b>Top Strategies:</b>\n{strat_lines}"
+            f"<b>Top Strategies:</b>\n{strat_lines}",
+            reply_markup=_MAIN_MENU,
         )
 
     async def build_and_send_daily_summary(self) -> None:
@@ -521,7 +672,7 @@ class TelegramNotifier:
         try:
             from prophet.db.database import get_session
             from prophet.db.models import Position
-            from sqlalchemy import func, select, case
+            from sqlalchemy import func, select
 
             now = datetime.now(timezone.utc)
             today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -548,10 +699,12 @@ class TelegramNotifier:
                 total_closed = (await db.execute(
                     select(func.count()).select_from(Position).where(Position.status == "closed")
                 )).scalar_one() or 0
+
                 wins = (await db.execute(
                     select(func.count()).select_from(Position).where(
                         Position.status == "closed", Position.net_pnl > 0)
                 )).scalar_one() or 0
+
                 win_rate = wins / total_closed if total_closed > 0 else 0.0
 
                 exposure = (await db.execute(
@@ -565,7 +718,6 @@ class TelegramNotifier:
                     .order_by(func.sum(Position.net_pnl).desc())
                     .limit(5)
                 )).all()
-                top_strategies = [(r[0], float(r[1])) for r in top_result]
 
             await self.send_daily_summary({
                 "total_pnl": total_pnl,
@@ -573,7 +725,7 @@ class TelegramNotifier:
                 "open_positions": open_count,
                 "closed_today": closed_today,
                 "win_rate": win_rate,
-                "top_strategies": top_strategies,
+                "top_strategies": [(r[0], float(r[1])) for r in top_result],
                 "total_exposure_usd": exposure,
             })
         except Exception as exc:

@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse
 
 from prophet.api.middleware import CORS_KWARGS, BearerTokenMiddleware
 from prophet.api.routes import config, data, markets, performance, positions, signals, strategies, system
+from prophet.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +88,28 @@ async def _lifespan(app: FastAPI):
             db_session=_db_signal,
             risk_manager=risk_mgr,
         )
+        # Live trading — only when PAPER_TRADING=false (must build before order_mgr)
+        live_trader = None
+        signal_router = None
+        if not settings.paper_trading:
+            from prophet.live.live_risk import LiveRiskManager
+            from prophet.live.live_trader import LiveTrader
+            from prophet.live.signal_router import SignalRouter
+            live_risk = LiveRiskManager(
+                max_daily_usd=settings.live_max_daily_usd,
+                max_open_positions=settings.live_max_open_positions,
+                per_strategy_max_usd=settings.live_per_strategy_max_usd,
+                max_single_order_usd=settings.live_max_single_order_usd,
+                live_strategies=settings.live_strategies,
+            )
+            live_trader = LiveTrader(clob_client=clob_client, risk_manager=live_risk)
+            signal_router = SignalRouter(live_trader=live_trader, risk_manager=live_risk)
+            logger.info("LiveTrader enabled — strategies: %s", sorted(live_risk.live_strategies))
+
         order_mgr = OrderManager(
             clob_client=clob_client,
             db_session=_db_order,
+            signal_router=signal_router,
         )
 
         _scheduler = Scheduler(
@@ -97,6 +117,7 @@ async def _lifespan(app: FastAPI):
             data_collector=data_collector,
             signal_generator=signal_gen,
             order_manager=order_mgr,
+            live_trader=live_trader,
         )
         await _scheduler.start()
 
@@ -141,6 +162,12 @@ async def _lifespan(app: FastAPI):
         ws_listener = PolymarketWSListener()
         await ws_listener.start()
         app.state.ws_listener = ws_listener
+
+        # Wire new_market WS events → scanner for instant market discovery
+        if app.state.scheduler is not None:
+            ws_listener.on_new_market(scanner.handle_new_market_event)
+            logger.info("WS new_market → scanner wired.")
+
         logger.info("PolymarketWSListener started.")
     except Exception as exc:
         logger.warning(

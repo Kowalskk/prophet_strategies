@@ -20,17 +20,18 @@ from prophet.strategies.volatility_spread import VolatilitySpreadStrategy
 
 
 class VolatilitySpreadX3(VolatilitySpreadStrategy):
-    """VS targeting ~3× return — enters at ≤33¢, holds to resolution."""
+    """VS targeting ~3× return — enters when one side ≤33¢, per-side check."""
 
     name = "vs_x3"
     description = (
         "Volatility Spread targeting ~3× return. "
-        "Places YES and NO limit orders only when mid price is at or below 0.33. "
-        "Holds position until ~200% gain or resolution."
+        "Enters on whichever side has mid price ≤ 0.33. "
+        "Exits at ~200% gain or resolution."
     )
     default_params: dict[str, Any] = {
         "spread_percent": 2.0,
-        "entry_price_max": 0.33,
+        "entry_price_max": 0.97,   # combined fallback (unused when per_side_max set)
+        "per_side_max": 0.33,
         "capital_per_side": 10.0,
         "exit_strategy": "sell_at_target",
         "sell_target_pct": 200.0,
@@ -38,17 +39,18 @@ class VolatilitySpreadX3(VolatilitySpreadStrategy):
 
 
 class VolatilitySpreadX4(VolatilitySpreadStrategy):
-    """VS targeting ~4× return — enters at ≤25¢, holds to resolution."""
+    """VS targeting ~4× return — enters when one side ≤25¢, per-side check."""
 
     name = "vs_x4"
     description = (
         "Volatility Spread targeting ~4× return. "
-        "Places YES and NO limit orders only when mid price is at or below 0.25. "
-        "Holds position until ~300% gain or resolution."
+        "Enters on whichever side has mid price ≤ 0.25. "
+        "Exits at ~300% gain or resolution."
     )
     default_params: dict[str, Any] = {
         "spread_percent": 2.0,
-        "entry_price_max": 0.25,
+        "entry_price_max": 0.97,
+        "per_side_max": 0.25,
         "capital_per_side": 10.0,
         "exit_strategy": "sell_at_target",
         "sell_target_pct": 300.0,
@@ -56,17 +58,18 @@ class VolatilitySpreadX4(VolatilitySpreadStrategy):
 
 
 class VolatilitySpreadX5(VolatilitySpreadStrategy):
-    """VS targeting ~5× return — enters at ≤20¢, holds to resolution."""
+    """VS targeting ~5× return — enters when one side ≤20¢, per-side check."""
 
     name = "vs_x5"
     description = (
         "Volatility Spread targeting ~5× return. "
-        "Places YES and NO limit orders only when mid price is at or below 0.20. "
-        "Holds position until ~400% gain or resolution."
+        "Enters on whichever side has mid price ≤ 0.20. "
+        "Exits at ~400% gain or resolution."
     )
     default_params: dict[str, Any] = {
         "spread_percent": 2.0,
-        "entry_price_max": 0.20,
+        "entry_price_max": 0.97,
+        "per_side_max": 0.20,
         "capital_per_side": 10.0,
         "exit_strategy": "sell_at_target",
         "sell_target_pct": 400.0,

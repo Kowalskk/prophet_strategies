@@ -56,6 +56,8 @@ class PolymarketWSListener:
         self._task: asyncio.Task | None = None
         self._token_ids: list[str] = []
         self._ws: Any = None  # active websockets connection
+        # Callbacks registered by other components
+        self._on_new_market_callbacks: list[Any] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -116,6 +118,18 @@ class PolymarketWSListener:
         if entry is None:
             return None
         return entry.get("mid")
+
+    def on_new_market(self, callback: Any) -> None:
+        """Register a callback for new_market WS events.
+
+        The callback will be called as: ``await callback(condition_id, raw_data)``
+        Use this to trigger immediate market processing without waiting for the
+        next scanner cycle.
+
+        Example::
+            ws_listener.on_new_market(scanner.handle_new_market_event)
+        """
+        self._on_new_market_callbacks.append(callback)
 
     async def refresh_subscriptions(self) -> None:
         """Reload token IDs from DB and re-send the subscription message.
@@ -216,6 +230,7 @@ class PolymarketWSListener:
         msg = json.dumps({
             "assets_ids": self._token_ids,
             "type": "market",
+            "custom_feature_enabled": True,
         })
         await ws.send(msg)
         logger.debug(
@@ -273,7 +288,15 @@ class PolymarketWSListener:
             self._handle_book(data)
         elif event_type == "last_trade_price":
             self._handle_last_trade(data)
-        else:
+        elif event_type == "best_bid_ask":
+            self._handle_best_bid_ask(data)
+        elif event_type == "market_resolved":
+            self._handle_market_resolved(data)
+        elif event_type == "new_market":
+            self._handle_new_market(data)
+        elif event_type == "tick_size_change":
+            pass  # informational only
+        elif event_type is not None:
             logger.debug("PolymarketWSListener: unhandled event_type=%r", event_type)
 
     def _handle_price_change(self, data: dict) -> None:
@@ -367,3 +390,111 @@ class PolymarketWSListener:
         self._prices[asset_id] = entry
 
         logger.debug("last_trade: asset=%s price=%s", asset_id[:12], price)
+
+    def _handle_best_bid_ask(self, data: dict) -> None:
+        """Handle best_bid_ask events — tighter real-time quote than price_change.
+
+        Format: {"event_type": "best_bid_ask", "asset_id": "...",
+                 "best_bid": "0.42", "best_ask": "0.44", "timestamp": ...}
+
+        Used by live_trader._get_current_price() to get an instant quote without
+        a REST call — avoids the 5-minute polling lag for exit decisions.
+        """
+        asset_id = data.get("asset_id")
+        if not asset_id:
+            return
+
+        try:
+            best_bid = float(data["best_bid"]) if data.get("best_bid") else None
+            best_ask = float(data["best_ask"]) if data.get("best_ask") else None
+        except (ValueError, TypeError) as exc:
+            logger.debug("_handle_best_bid_ask: parse error for asset=%s: %s", asset_id, exc)
+            return
+
+        mid = None
+        if best_bid is not None and best_ask is not None:
+            mid = (best_bid + best_ask) / 2.0
+
+        entry = self._prices.get(asset_id, {})
+        entry["best_bid"] = best_bid
+        entry["best_ask"] = best_ask
+        if mid is not None:
+            entry["mid"] = mid
+        entry["ts"] = _utcnow()
+        self._prices[asset_id] = entry
+
+        logger.debug(
+            "best_bid_ask: asset=%s bid=%s ask=%s mid=%s",
+            asset_id[:12], best_bid, best_ask, mid,
+        )
+
+    def _handle_new_market(self, data: dict) -> None:
+        """Handle new_market events — a new market was listed on Polymarket.
+
+        Fires registered callbacks (e.g. scanner.handle_new_market_event) so new
+        markets are discovered immediately without waiting for the next scan cycle.
+
+        Format varies but typically includes: condition_id, question, tokens, etc.
+        """
+        condition_id = data.get("condition_id", data.get("market", ""))
+        if not condition_id:
+            logger.debug("new_market event missing condition_id: %s", data)
+            return
+
+        logger.info(
+            "WS new_market: condition=%s question=%r",
+            condition_id[:16], data.get("question", "")[:60],
+        )
+
+        if not self._on_new_market_callbacks:
+            return
+
+        import asyncio
+        for cb in self._on_new_market_callbacks:
+            asyncio.ensure_future(cb(condition_id, data))
+
+    def _handle_market_resolved(self, data: dict) -> None:
+        """Handle market_resolved events — update DB in background.
+
+        Fires when a market resolves (requires ``custom_feature_enabled: true``
+        in subscription). Contains ``winning_asset_id`` and ``winning_outcome``.
+        """
+        condition_id = data.get("market", data.get("condition_id", ""))
+        winning_outcome = data.get("winning_outcome", "")
+        winning_asset_id = data.get("winning_asset_id", "")
+
+        if not condition_id:
+            return
+
+        logger.info(
+            "WS market_resolved: condition=%s outcome=%s winner_token=%s",
+            condition_id[:16], winning_outcome, winning_asset_id[:16] if winning_asset_id else "?",
+        )
+
+        # Fire-and-forget DB update — don't block the WS message loop
+        import asyncio
+        asyncio.ensure_future(self._persist_resolution(condition_id, winning_outcome))
+
+    async def _persist_resolution(self, condition_id: str, outcome: str) -> None:
+        """Persist a market resolution detected via WebSocket."""
+        try:
+            from sqlalchemy import select
+            from prophet.db.database import get_session
+            from prophet.db.models import Market
+
+            async with get_session() as session:
+                result = await session.execute(
+                    select(Market).where(Market.condition_id == condition_id)
+                )
+                market = result.scalar_one_or_none()
+                if market and market.status in ("active", "expired"):
+                    market.status = "resolved"
+                    market.resolved_outcome = outcome.upper() if outcome else None
+                    market.resolution_time = _utcnow()
+                    await session.commit()
+                    logger.info(
+                        "WS resolution persisted: market_id=%d %s → %s",
+                        market.id, condition_id[:12], outcome,
+                    )
+        except Exception as exc:
+            logger.warning("WS _persist_resolution failed for %s: %s", condition_id[:12], exc)

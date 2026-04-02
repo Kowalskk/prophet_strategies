@@ -110,6 +110,10 @@ class Market(Base):
         String(255), nullable=False,
         comment="CLOB token ID for the NO outcome.",
     )
+    slug: Mapped[str | None] = mapped_column(
+        String(512), nullable=True,
+        comment="Market slug for Polymarket URL: polymarket.com/event/{slug}",
+    )
     volume_usd: Mapped[float] = mapped_column(
         Float, nullable=False, default=0.0,
         comment="Total traded volume in USD from Gamma API.",
@@ -135,22 +139,22 @@ class Market(Base):
 
     # Relationships
     snapshots: Mapped[list[OrderBookSnapshot]] = relationship(
-        "OrderBookSnapshot", back_populates="market", lazy="selectin"
+        "OrderBookSnapshot", back_populates="market", lazy="noload"
     )
     observed_trades: Mapped[list[ObservedTrade]] = relationship(
-        "ObservedTrade", back_populates="market", lazy="selectin"
+        "ObservedTrade", back_populates="market", lazy="noload"
     )
     signals: Mapped[list[Signal]] = relationship(
-        "Signal", back_populates="market", lazy="selectin"
+        "Signal", back_populates="market", lazy="noload"
     )
     paper_orders: Mapped[list[PaperOrder]] = relationship(
-        "PaperOrder", back_populates="market", lazy="selectin"
+        "PaperOrder", back_populates="market", lazy="noload"
     )
     positions: Mapped[list[Position]] = relationship(
-        "Position", back_populates="market", lazy="selectin"
+        "Position", back_populates="market", lazy="noload"
     )
     strategy_configs: Mapped[list[StrategyConfig]] = relationship(
-        "StrategyConfig", back_populates="market", lazy="selectin"
+        "StrategyConfig", back_populates="market", lazy="noload"
     )
 
     def __repr__(self) -> str:
@@ -603,3 +607,68 @@ class StrategyConfig(Base):
             f"<StrategyConfig id={self.id} strategy={self.strategy!r} "
             f"market_id={self.market_id} enabled={self.enabled}>"
         )
+
+
+# ---------------------------------------------------------------------------
+# 10. Intraday Markets (crypto up/down: 5min, 15min, 1h, daily)
+# ---------------------------------------------------------------------------
+
+
+class IntradayMarket(Base):
+    """Short-duration binary crypto market (BTC/ETH/SOL/HYPE above/below $X)."""
+
+    __tablename__ = "intraday_markets"
+    __table_args__ = (
+        Index("ix_intraday_crypto_tf", "crypto", "timeframe"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    condition_id: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    question: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    slug: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    crypto: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    direction: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    timeframe: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    resolution_date: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    end_date: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    volume: Mapped[float | None] = mapped_column(Float, nullable=True)
+    liquidity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_NOW,
+    )
+
+    trades: Mapped[list[IntradayTrade]] = relationship(
+        "IntradayTrade", back_populates="market", cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"<IntradayMarket {self.crypto} {self.direction} ${self.threshold} {self.timeframe}>"
+
+
+class IntradayTrade(Base):
+    """Trade on an intraday crypto market."""
+
+    __tablename__ = "intraday_trades"
+    __table_args__ = (
+        UniqueConstraint("condition_id", "trade_id", name="uq_intraday_trade"),
+        Index("ix_intraday_trades_cid", "condition_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    condition_id: Mapped[str] = mapped_column(
+        String(200), ForeignKey("intraday_markets.condition_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    trade_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    size: Mapped[float | None] = mapped_column(Float, nullable=True)
+    side: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    timestamp: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    market: Mapped[IntradayMarket] = relationship("IntradayMarket", back_populates="trades")
+
+    def __repr__(self) -> str:
+        return f"<IntradayTrade {self.condition_id[:16]} {self.side} {self.price}>"

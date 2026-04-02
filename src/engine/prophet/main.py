@@ -29,6 +29,12 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 
+# Silence noisy third-party loggers that flood the event loop in DEBUG mode
+for _noisy in ("websockets", "httpx", "httpcore", "asyncio", "apscheduler.executors"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+# Our own ws_listener generates thousands of DEBUG lines/sec — keep at INFO
+logging.getLogger("prophet.core.ws_listener").setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 

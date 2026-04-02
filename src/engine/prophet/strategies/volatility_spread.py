@@ -98,18 +98,32 @@ class VolatilitySpreadStrategy(StrategyBase):
         target_yes = yes_mid * (1.0 - spread_frac)
         target_no = no_mid * (1.0 - spread_frac)
 
-        # The real edge of VS is that combined_cost < 1.0 (guaranteed profit).
-        # Checking each side individually against entry_price_max is wrong for
-        # binary markets (YES + NO = 1), where one side is always > 0.5.
-        # Instead, enforce max combined cost < 1.0 with a margin.
-        combined_cost = target_yes + target_no
-        max_combined = p["entry_price_max"]  # re-used as max combined cost
-        if combined_cost >= max_combined:
-            logger.debug(
-                "volatility_spread: combined_cost=%.4f >= max_combined=%.4f — skipping market_id=%s",
-                combined_cost, max_combined, market.id,
-            )
-            return []
+        per_side_max = p.get("per_side_max")
+
+        if per_side_max is not None:
+            # Per-side mode: emit signals only for the side(s) cheap enough.
+            # Used by vs_x3/x4/x5 where entry_price_max is per-side, not combined.
+            yes_ok = target_yes <= per_side_max
+            no_ok = target_no <= per_side_max
+            if not yes_ok and not no_ok:
+                logger.debug(
+                    "volatility_spread: neither side cheap enough (yes=%.4f no=%.4f max=%.4f) market_id=%s",
+                    target_yes, target_no, per_side_max, market.id,
+                )
+                return []
+        else:
+            # Combined-cost mode (default): YES+NO combined must be < entry_price_max.
+            # The real edge of VS is that combined_cost < 1.0 (guaranteed profit).
+            combined_cost = target_yes + target_no
+            max_combined = p["entry_price_max"]
+            if combined_cost >= max_combined:
+                logger.debug(
+                    "volatility_spread: combined_cost=%.4f >= max_combined=%.4f — skipping market_id=%s",
+                    combined_cost, max_combined, market.id,
+                )
+                return []
+            yes_ok = True
+            no_ok = True
 
         # Safety: ensure prices are in valid range
         target_yes = max(0.001, min(0.999, target_yes))
@@ -124,8 +138,9 @@ class VolatilitySpreadStrategy(StrategyBase):
 
         exit_params = {"target_pct": p["sell_target_pct"]}
 
-        signals: list[TradeSignal] = [
-            TradeSignal(
+        signals: list[TradeSignal] = []
+        if yes_ok:
+            signals.append(TradeSignal(
                 market_id=market.id,
                 side="YES",
                 target_price=round(target_yes, 4),
@@ -135,8 +150,9 @@ class VolatilitySpreadStrategy(StrategyBase):
                 exit_params=exit_params,
                 metadata=meta,
                 strategy=self.name,
-            ),
-            TradeSignal(
+            ))
+        if no_ok:
+            signals.append(TradeSignal(
                 market_id=market.id,
                 side="NO",
                 target_price=round(target_no, 4),
@@ -146,8 +162,7 @@ class VolatilitySpreadStrategy(StrategyBase):
                 exit_params=exit_params,
                 metadata=meta,
                 strategy=self.name,
-            ),
-        ]
+            ))
 
         logger.info(
             "volatility_spread: market_id=%d YES@%.4f NO@%.4f (combined=%.4f)",

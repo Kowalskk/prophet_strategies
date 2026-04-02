@@ -32,6 +32,8 @@ Usage
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
+from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Coroutine
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -39,6 +41,9 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger(__name__)
+
+# Alert after this many consecutive failures for the same job
+_FAIL_ALERT_THRESHOLD = 3
 
 
 class Scheduler:
@@ -62,14 +67,17 @@ class Scheduler:
         data_collector: Any,
         signal_generator: Any,
         order_manager: Any,
+        live_trader: Any = None,
     ) -> None:
         self._scanner = scanner
         self._data_collector = data_collector
         self._signal_generator = signal_generator
         self._order_manager = order_manager
+        self._live_trader = live_trader  # None when paper_trading=True
 
         self._scheduler = AsyncIOScheduler(timezone="UTC")
         self._running = False
+        self._fail_counts: dict[str, int] = defaultdict(int)  # consecutive failures per job
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -85,6 +93,16 @@ class Scheduler:
         self._scheduler.start()
         self._running = True
         logger.info("Scheduler started — %d jobs registered", len(self._scheduler.get_jobs()))
+
+        # Notify Telegram that engine is up
+        try:
+            from prophet.core.telegram_bot import notifier
+            if notifier.enabled:
+                await notifier._send(
+                    "🟢 <b>Engine arrancado</b>\nTodos los jobs registrados y corriendo."
+                )
+        except Exception as exc:
+            logger.warning("Failed to send startup Telegram notification: %s", exc)
 
     async def stop(self) -> None:
         """Gracefully stop the scheduler."""
@@ -227,6 +245,66 @@ class Scheduler:
             misfire_grace_time=180,
         )
 
+        # ── Heartbeat — data freshness check every 10 min ─────────────
+        async def _heartbeat() -> None:
+            from prophet.core.telegram_bot import notifier
+            if not notifier.enabled:
+                return
+            try:
+                from prophet.db.database import get_session
+                from sqlalchemy import text
+                async with get_session() as db:
+                    # Check spot prices updated in last 5 min
+                    row = await db.execute(text(
+                        "SELECT MAX(timestamp) FROM price_snapshots"
+                    ))
+                    last_price = row.scalar()
+
+                    # Check OB snapshots updated in last 10 min
+                    row2 = await db.execute(text(
+                        "SELECT MAX(timestamp) FROM orderbook_snapshots"
+                    ))
+                    last_ob = row2.scalar()
+
+                now = datetime.now(timezone.utc)
+                issues = []
+
+                if last_price is None or (now - last_price.replace(tzinfo=timezone.utc) if last_price.tzinfo is None else now - last_price) > timedelta(minutes=5):
+                    issues.append("Spot prices: sin actualizar >5 min")
+
+                if last_ob is None or (now - last_ob.replace(tzinfo=timezone.utc) if last_ob.tzinfo is None else now - last_ob) > timedelta(minutes=15):
+                    issues.append("Order books: sin actualizar >15 min")
+
+                if issues:
+                    msg = "⚠️ <b>DATOS DESACTUALIZADOS</b>\n" + "\n".join(f"• {i}" for i in issues)
+                    await notifier._send(msg)
+
+            except Exception as exc:
+                logger.warning("Heartbeat check failed: %s", exc)
+
+        s.add_job(
+            self._safe_run("heartbeat", _heartbeat),
+            trigger=IntervalTrigger(minutes=10),
+            id="heartbeat",
+            name="Heartbeat — data freshness check",
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
+        # ── Intraday Market Collector ─────────────────────────────────
+        from prophet.core.intraday_collector import IntradayCollector
+        _intraday = IntradayCollector()
+
+        s.add_job(
+            self._safe_run("intraday_collector.collect", _intraday.collect),
+            trigger=IntervalTrigger(minutes=30),
+            id="intraday_collect",
+            name="IntradayCollector — crypto up/down markets",
+            replace_existing=True,
+            misfire_grace_time=600,
+            next_run_time=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        )
+
         # ── Telegram Daily Summary ────────────────────────────────────
         # Every day at 20:00 UTC
         async def _daily_summary() -> None:
@@ -242,6 +320,34 @@ class Scheduler:
             replace_existing=True,
             misfire_grace_time=3600,
         )
+
+        # ── Live Trader (only when paper_trading=False) ───────────────
+        if self._live_trader is not None:
+            s.add_job(
+                self._safe_run("live_trader.heartbeat", self._live_trader.send_heartbeat),
+                trigger=IntervalTrigger(seconds=5),
+                id="live_heartbeat",
+                name="LiveTrader — CLOB heartbeat",
+                replace_existing=True,
+                misfire_grace_time=3,  # tight — must fire within 3s of schedule
+            )
+            s.add_job(
+                self._safe_run("live_trader.check_live_fills", self._live_trader.check_live_fills),
+                trigger=IntervalTrigger(minutes=2),
+                id="live_check_fills",
+                name="LiveTrader — check fills",
+                replace_existing=True,
+                misfire_grace_time=120,
+            )
+            s.add_job(
+                self._safe_run("live_trader.check_live_exits", self._live_trader.check_live_exits),
+                trigger=IntervalTrigger(minutes=5),
+                id="live_check_exits",
+                name="LiveTrader — check exits",
+                replace_existing=True,
+                misfire_grace_time=180,
+            )
+            logger.info("LiveTrader jobs registered (PAPER_TRADING=false) — heartbeat every 5s")
 
         logger.debug(
             "Registered %d scheduler jobs", len(s.get_jobs())
@@ -276,7 +382,10 @@ class Scheduler:
                 logger.debug("Job starting: %s", job_name)
                 result = await coro_fn()
                 logger.debug("Job completed: %s → %s", job_name, result)
+                self._fail_counts[job_name] = 0  # reset on success
             except Exception as exc:
+                self._fail_counts[job_name] += 1
+                count = self._fail_counts[job_name]
                 logger.error(
                     "Job FAILED: %s — %s: %s",
                     job_name,
@@ -284,6 +393,20 @@ class Scheduler:
                     exc,
                     exc_info=True,
                 )
+                if count >= _FAIL_ALERT_THRESHOLD:
+                    try:
+                        from prophet.core.telegram_bot import notifier
+                        if notifier.enabled:
+                            import asyncio as _asyncio
+                            import html as _html
+                            _asyncio.ensure_future(notifier._send(
+                                f"🔴 <b>JOB FALLANDO</b>\n"
+                                f"<code>{_html.escape(job_name)}</code>\n"
+                                f"{count} fallos consecutivos\n"
+                                f"{_html.escape(str(exc)[:300])}"
+                            ))
+                    except Exception:
+                        pass
 
         # Preserve the original function name for APScheduler's repr
         _wrapper.__name__ = job_name

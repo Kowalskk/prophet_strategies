@@ -170,6 +170,7 @@ async def init_db(create_tables: bool = False) -> None:
         async with engine.begin() as conn:
             # Import models so their metadata is registered on Base
             from prophet.db import models  # noqa: F401
+            from prophet.live import live_models  # noqa: F401
 
             await conn.run_sync(Base.metadata.create_all)
             logger.info("Database tables created (create_tables=True).")

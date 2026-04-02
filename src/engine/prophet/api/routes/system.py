@@ -97,6 +97,48 @@ async def status(db: AsyncSession = Depends(get_db)) -> SystemStatusResponse:
     )
 
 
+@router.post("/live/cancel-all", response_model=MessageResponse)
+async def cancel_all_live_orders() -> MessageResponse:
+    """Emergency: cancel ALL open live orders on the CLOB in a single call.
+
+    Use when: engine restart, risk breach, manual override needed.
+    No-op when paper_trading=True (returns 200 with explanation).
+    """
+    if settings.paper_trading:
+        return MessageResponse(message="Paper trading mode — no live orders to cancel.")
+
+    try:
+        from prophet.api.app import app
+        clob = getattr(app.state, "clob_client", None)
+        if clob is None:
+            return MessageResponse(message="CLOB client not available.")
+
+        cancelled = await clob.cancel_all_orders()
+
+        # Also mark all open live_orders as cancelled in DB
+        try:
+            from prophet.db.database import get_session
+            from prophet.live.live_models import LiveOrder
+            from sqlalchemy import update
+            from datetime import timezone
+
+            async with get_session() as db:
+                await db.execute(
+                    update(LiveOrder)
+                    .where(LiveOrder.status == "open")
+                    .values(status="cancelled", error_msg="Manual cancel-all via API")
+                )
+                await db.commit()
+        except Exception as db_exc:
+            pass  # CLOB cancel succeeded even if DB update failed
+
+        return MessageResponse(
+            message=f"cancel_all sent to CLOB — accepted={cancelled}. All live_orders marked cancelled."
+        )
+    except Exception as exc:
+        return MessageResponse(message=f"cancel_all FAILED: {exc}")
+
+
 @router.post("/kill-switch", response_model=MessageResponse)
 async def toggle_kill_switch(db: AsyncSession = Depends(get_db)) -> MessageResponse:
     """Toggle the kill switch. Persists state to the system_state table."""

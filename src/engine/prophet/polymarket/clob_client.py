@@ -47,9 +47,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 CLOB_BASE_URL = "https://clob.polymarket.com"
+DATA_API_BASE_URL = "https://data-api.polymarket.com"
 _DEFAULT_TIMEOUT = 15.0  # seconds
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = 1.5  # seconds — multiplied by attempt number
+_BATCH_BOOK_SIZE = 50  # max token_ids per POST /books request
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +133,7 @@ class PolymarketClient:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._http: httpx.AsyncClient | None = None
+        self._data_http: httpx.AsyncClient | None = None  # Data API client
 
         # Lazily initialised py-clob-client (only needed for live orders)
         self._clob_sdk: Any | None = None
@@ -147,7 +150,7 @@ class PolymarketClient:
         await self.close()
 
     async def start(self) -> None:
-        """Open the shared httpx session."""
+        """Open the shared httpx sessions (CLOB + Data API)."""
         if self._http is None:
             self._http = httpx.AsyncClient(
                 base_url=self._base_url,
@@ -155,14 +158,24 @@ class PolymarketClient:
                 headers={"Accept": "application/json"},
                 follow_redirects=True,
             )
-            logger.debug("PolymarketClient HTTP session opened (base=%s)", self._base_url)
+        if self._data_http is None:
+            self._data_http = httpx.AsyncClient(
+                base_url=DATA_API_BASE_URL,
+                timeout=self._timeout,
+                headers={"Accept": "application/json"},
+                follow_redirects=True,
+            )
+        logger.debug("PolymarketClient HTTP sessions opened (CLOB + Data API)")
 
     async def close(self) -> None:
-        """Close the shared httpx session."""
+        """Close all httpx sessions."""
         if self._http is not None:
             await self._http.aclose()
             self._http = None
-            logger.debug("PolymarketClient HTTP session closed")
+        if self._data_http is not None:
+            await self._data_http.aclose()
+            self._data_http = None
+        logger.debug("PolymarketClient HTTP sessions closed")
 
     def _ensure_started(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -268,6 +281,23 @@ class PolymarketClient:
 
         return markets, cursor
 
+    async def get_market_resolution(self, condition_id: str) -> tuple[bool, str | None]:
+        """Check if a market has resolved by querying CLOB tokens for a winner.
+
+        Returns (resolved, outcome) where outcome is "YES", "NO", or None.
+        CLOB sets token.winner=True immediately when market resolves, unlike Gamma.
+        """
+        http = self._ensure_started()
+        try:
+            data = await _request_with_retry(http, "GET", f"/markets/{condition_id}")
+            tokens = data.get("tokens", []) if isinstance(data, dict) else []
+            for token in tokens:
+                if isinstance(token, dict) and token.get("winner") is True:
+                    return True, str(token.get("outcome", "")).upper() or None
+        except Exception as exc:
+            logger.debug("CLOB resolution check failed for %s: %s", condition_id[:12], exc)
+        return False, None
+
     async def get_all_markets(self, *, active: bool | None = None) -> list[MarketInfo]:
         """Paginate through all CLOB markets and return the full list.
 
@@ -343,30 +373,29 @@ class PolymarketClient:
         token_id: str,
         *,
         limit: int = 100,
-        before: str | None = None,
-        after: str | None = None,
     ) -> list[Trade]:
-        """Fetch recent trades for a token.
+        """Fetch recent public trades for a token via the Data API (no auth).
+
+        Uses ``https://data-api.polymarket.com/trades`` which is public and
+        does NOT require HMAC authentication (unlike ``/data/trades`` on the CLOB).
 
         Parameters
         ----------
         token_id:
             CLOB token ID to query.
         limit:
-            Maximum number of trades to return.
-        before:
-            Return trades with timestamp < this ISO string.
-        after:
-            Return trades with timestamp > this ISO string.
+            Maximum number of trades to return (Data API max: 10000).
         """
-        http = self._ensure_started()
-        params: dict[str, Any] = {"token_id": token_id, "limit": limit}
-        if before:
-            params["before"] = before
-        if after:
-            params["after"] = after
+        if self._data_http is None:
+            await self.start()
+        params: dict[str, Any] = {"asset_id": token_id, "limit": min(limit, 10000)}
 
-        data = await _request_with_retry(http, "GET", "/trades", params=params)
+        try:
+            data = await _request_with_retry(self._data_http, "GET", "/trades", params=params)  # type: ignore[arg-type]
+        except Exception as exc:
+            logger.debug("Data API trades failed for token %s: %s", token_id[:16], exc)
+            return []
+
         raw_trades = data if isinstance(data, list) else data.get("data", [])
 
         trades: list[Trade] = []
@@ -395,6 +424,158 @@ class PolymarketClient:
         if best_bid is not None and best_ask is not None:
             mid = (best_bid + best_ask) / 2.0
         return {"bid": best_bid, "ask": best_ask, "mid": mid}
+
+    # ------------------------------------------------------------------
+    # Batch endpoints (reduce N HTTP calls → 1)
+    # ------------------------------------------------------------------
+
+    async def get_order_books_batch(
+        self, token_ids: list[str],
+    ) -> dict[str, OrderBook]:
+        """Fetch order books for multiple tokens in batch via ``POST /books``.
+
+        Returns a dict mapping token_id → OrderBook.  Token IDs that fail
+        (e.g. 404 no liquidity) are silently skipped.
+        """
+        http = self._ensure_started()
+        results: dict[str, OrderBook] = {}
+
+        # CLOB POST /books expects [{"token_id": "..."}, ...] format
+        for i in range(0, len(token_ids), _BATCH_BOOK_SIZE):
+            chunk = token_ids[i : i + _BATCH_BOOK_SIZE]
+            payload = [{"token_id": tid} for tid in chunk]
+            try:
+                data = await _request_with_retry(
+                    http, "POST", "/books",
+                    json=payload,
+                )
+                if not isinstance(data, list):
+                    data = [data]
+
+                for book_data in data:
+                    if not isinstance(book_data, dict):
+                        continue
+                    tid = book_data.get("asset_id", book_data.get("token_id", ""))
+                    if not tid:
+                        # Try to match by position
+                        continue
+
+                    bids: list[OrderBookLevel] = []
+                    asks: list[OrderBookLevel] = []
+                    for level in book_data.get("bids", []):
+                        try:
+                            bids.append(OrderBookLevel(price=level["price"], size=level["size"]))
+                        except Exception:
+                            pass
+                    for level in book_data.get("asks", []):
+                        try:
+                            asks.append(OrderBookLevel(price=level["price"], size=level["size"]))
+                        except Exception:
+                            pass
+
+                    bids.sort(key=lambda x: x.price, reverse=True)
+                    asks.sort(key=lambda x: x.price)
+
+                    results[tid] = OrderBook(
+                        token_id=tid,
+                        bids=bids,
+                        asks=asks,
+                        timestamp=_utcnow(),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Batch OB fetch failed for chunk of %d tokens: %s", len(chunk), exc,
+                )
+
+        return results
+
+    async def get_midpoints_batch(
+        self, token_ids: list[str],
+    ) -> dict[str, float]:
+        """Fetch midpoint prices for multiple tokens via ``POST /midpoints``.
+
+        Returns a dict mapping token_id → mid_price.
+        """
+        http = self._ensure_started()
+        results: dict[str, float] = {}
+        try:
+            data = await _request_with_retry(
+                http, "POST", "/midpoints",
+                json=token_ids,
+            )
+            if isinstance(data, dict):
+                for tid, price in data.items():
+                    try:
+                        results[tid] = float(price)
+                    except (TypeError, ValueError):
+                        pass
+            elif isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        tid = item.get("token_id", item.get("asset_id", ""))
+                        mid = item.get("mid", item.get("midpoint"))
+                        if tid and mid is not None:
+                            results[tid] = float(mid)
+        except Exception as exc:
+            logger.warning("Batch midpoints failed: %s", exc)
+        return results
+
+    async def get_last_trade_prices_batch(
+        self, token_ids: list[str],
+    ) -> dict[str, float]:
+        """Fetch last trade prices for multiple tokens via ``POST /last-trades-prices``.
+
+        No authentication required. Returns token_id → price.
+        """
+        http = self._ensure_started()
+        results: dict[str, float] = {}
+        try:
+            data = await _request_with_retry(
+                http, "POST", "/last-trades-prices",
+                json=token_ids,
+            )
+            if isinstance(data, dict):
+                for tid, price in data.items():
+                    try:
+                        results[tid] = float(price)
+                    except (TypeError, ValueError):
+                        pass
+            elif isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        tid = item.get("token_id", item.get("asset_id", ""))
+                        price = item.get("price", item.get("last_trade_price"))
+                        if tid and price is not None:
+                            results[tid] = float(price)
+        except Exception as exc:
+            logger.warning("Batch last trade prices failed: %s", exc)
+        return results
+
+    async def get_spreads_batch(
+        self, token_ids: list[str],
+    ) -> dict[str, dict[str, float]]:
+        """Fetch spreads for multiple tokens via ``POST /spreads``.
+
+        Returns token_id → {bid, ask, spread}.
+        """
+        http = self._ensure_started()
+        results: dict[str, dict[str, float]] = {}
+        try:
+            data = await _request_with_retry(
+                http, "POST", "/spreads",
+                json=token_ids,
+            )
+            if isinstance(data, dict):
+                for tid, spread_data in data.items():
+                    if isinstance(spread_data, dict):
+                        results[tid] = {
+                            "bid": float(spread_data.get("bid", 0)),
+                            "ask": float(spread_data.get("ask", 0)),
+                            "spread": float(spread_data.get("spread", 0)),
+                        }
+        except Exception as exc:
+            logger.warning("Batch spreads failed: %s", exc)
+        return results
 
     # ------------------------------------------------------------------
     # Order placement (LIVE ONLY)
@@ -488,6 +669,78 @@ class PolymarketClient:
             return bool(cancelled)
         except Exception as exc:
             logger.error("Order cancellation failed for %s: %s", order_id, exc)
+            raise
+
+    async def get_order(self, order_id: str) -> dict[str, Any]:
+        """Fetch a single order's status from the CLOB.
+
+        Requires L2 HMAC auth — uses the SDK client.
+        Returns a dict with: id, status, size_matched, original_size, price, asset_id.
+
+        Raises
+        ------
+        RuntimeError
+            When ``settings.paper_trading`` is True.
+        """
+        if settings.paper_trading:
+            raise RuntimeError("Paper trading mode is ON.")
+
+        sdk = self._get_sdk_client()
+        try:
+            resp = sdk.get_order(order_id)
+            return resp if isinstance(resp, dict) else {}
+        except Exception as exc:
+            logger.warning("get_order failed for %s: %s", order_id, exc)
+            raise
+
+    async def post_heartbeat(self, heartbeat_id: str | None = None) -> str | None:
+        """Send a heartbeat to keep live orders active.
+
+        WITHOUT a heartbeat every ≤10s, the CLOB will auto-cancel all open orders.
+        Call this every 5s when live trading is active.
+
+        Returns the next heartbeat_id to pass on the following call.
+
+        Raises
+        ------
+        RuntimeError
+            When ``settings.paper_trading`` is True.
+        """
+        if settings.paper_trading:
+            raise RuntimeError("Paper trading mode is ON.")
+
+        sdk = self._get_sdk_client()
+        try:
+            resp = sdk.post_heartbeat(heartbeat_id)
+            return resp.get("heartbeat_id") if isinstance(resp, dict) else None
+        except Exception as exc:
+            logger.warning("Heartbeat failed: %s", exc)
+            return None
+
+    async def cancel_all_orders(self) -> bool:
+        """Cancel ALL open orders in a single CLOB call.
+
+        Use this as a safety shutdown: engine restart, risk breach, or emergency stop.
+        Equivalent to DELETE /cancel-all on the CLOB API.
+
+        Returns True if the cancellation was accepted by the CLOB.
+
+        Raises
+        ------
+        RuntimeError
+            When ``settings.paper_trading`` is True.
+        """
+        if settings.paper_trading:
+            raise RuntimeError("Paper trading mode is ON.")
+
+        sdk = self._get_sdk_client()
+        try:
+            resp = sdk.cancel_all()
+            cancelled: bool = resp.get("cancelled", False) if isinstance(resp, dict) else bool(resp)
+            logger.info("cancel_all_orders: cancelled=%s", cancelled)
+            return bool(cancelled)
+        except Exception as exc:
+            logger.error("cancel_all_orders failed: %s", exc)
             raise
 
     async def get_open_orders(self) -> list[dict[str, Any]]:

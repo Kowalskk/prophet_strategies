@@ -89,8 +89,8 @@ class WeatherFadeStrategy(StrategyBase):
         "capital_per_signal": 25.0,
         "max_hours_to_close": 48,   # only profitable at short horizons (<48h)
         "min_hours_to_close": 0.5,  # skip markets about to resolve (slippage risk)
-        "exit_strategy": "sell_at_target",
-        "sell_target_pct": 80.0,    # sell when price rises ~80% toward true value
+        "exit_strategy": "hold_to_resolution",
+        "sell_target_pct": 0,       # hold to resolution — +50% ROI simulated
     }
 
     async def evaluate(
@@ -219,8 +219,17 @@ class WeatherFadeConservative(WeatherFadeStrategy):
         "min_edge": 0.06, "max_hours_to_close": 24.0, "capital_per_signal": 15.0}
 
 
+class WeatherFadeUltraShort(WeatherFadeStrategy):
+    """Only <6h horizon where overconfidence is strongest (theta 0.69-0.74)."""
+    name = "weather_fade_ultra"
+    description = "Weather fade: max 6h horizon only (theta 0.69-0.74), strongest overconfidence"
+    default_params = {**WeatherFadeStrategy.default_params,
+        "max_hours_to_close": 6.0, "min_edge": 0.05, "capital_per_signal": 30.0}
+
+
 ALL_WEATHER_FADE_CLASSES = [
     WeatherFadeStrategy,
     WeatherFadeAggressive,
     WeatherFadeConservative,
+    WeatherFadeUltraShort,
 ]

@@ -514,6 +514,22 @@ def _parse_gamma_market(raw: dict[str, Any]) -> PolymarketMarket:
     if isinstance(raw_tags, list):
         tags = [t if isinstance(t, dict) else {"slug": str(t)} for t in raw_tags]
 
+    # Gamma delays setting resolved=True after close. Infer from outcomePrices:
+    # ["1","0"] = YES won, ["0","1"] = NO won. closed=True confirms market ended.
+    _raw_resolved = bool(raw.get("resolved", False))
+    _outcome_prices = raw.get("outcomePrices") or []
+    _closed = bool(raw.get("closed", False))
+    _inferred_outcome: str | None = None
+    if not _raw_resolved and _closed and isinstance(_outcome_prices, list) and len(_outcome_prices) == 2:
+        try:
+            yes_p, no_p = float(_outcome_prices[0]), float(_outcome_prices[1])
+            if yes_p >= 0.99 and no_p <= 0.01:
+                _raw_resolved, _inferred_outcome = True, "YES"
+            elif no_p >= 0.99 and yes_p <= 0.01:
+                _raw_resolved, _inferred_outcome = True, "NO"
+        except (ValueError, TypeError):
+            pass
+
     return PolymarketMarket(
         id=market_id,
         condition_id=condition_id,
@@ -528,8 +544,8 @@ def _parse_gamma_market(raw: dict[str, Any]) -> PolymarketMarket:
         end_date_iso=raw.get("endDateIso") or raw.get("end_date_iso") or raw.get("endDate"),
         game_start_time=raw.get("gameStartTime"),
         resolution_source=str(raw.get("resolutionSource") or ""),
-        resolved=bool(raw.get("resolved", False)),
-        outcome=raw.get("outcome") or raw.get("outcomePrices"),
+        resolved=_raw_resolved,
+        outcome=_inferred_outcome or raw.get("outcome") or raw.get("outcomePrices"),
         clob_token_ids=clob_token_ids,
         tokens=tokens,
         last_trade_price=raw.get("lastTradePrice") or raw.get("last_trade_price"),
