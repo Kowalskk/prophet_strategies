@@ -72,6 +72,9 @@ def _build_engine() -> AsyncEngine:
         pool_recycle=3600,   # Recycle connections every hour
         echo=False,          # Set to True for SQL debug output
         future=True,
+        # Disable asyncpg prepared statement cache to avoid stale OID references
+        # after DROP/CREATE TABLE operations (e.g. DB migrations/restores).
+        connect_args={"statement_cache_size": 0},
     )
 
 
