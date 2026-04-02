@@ -292,18 +292,9 @@ class Scheduler:
         )
 
         # ── Intraday Market Collector ─────────────────────────────────
-        from prophet.core.intraday_collector import IntradayCollector
-        _intraday = IntradayCollector()
-
-        s.add_job(
-            self._safe_run("intraday_collector.collect", _intraday.collect),
-            trigger=IntervalTrigger(minutes=30),
-            id="intraday_collect",
-            name="IntradayCollector — crypto up/down markets",
-            replace_existing=True,
-            misfire_grace_time=600,
-            next_run_time=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
-        )
+        # DISABLED — only useful when intraday strategies are ready for live trading.
+        # Historical data can be downloaded on demand from Gamma API.
+        # Re-enable when intraday edge is validated and live strategies are deployed.
 
         # ── Telegram Daily Summary ────────────────────────────────────
         # Every day at 20:00 UTC
