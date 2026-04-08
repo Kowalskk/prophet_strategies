@@ -151,11 +151,11 @@ class LivePosition(Base):
 
     # Status
     status: Mapped[str] = mapped_column(
-        String(10), nullable=False, default="open", index=True,
+        String(10), nullable=False, default="open",
         comment="open | closed.",
     )
     opened_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=_NOW, index=True,
+        DateTime(timezone=True), nullable=False, server_default=_NOW,
     )
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -47,6 +47,61 @@ _FEE_RATE = 0.02  # 2% Polymarket taker fee
 _ORDER_EXPIRY_HOURS = 168  # 1 week default expiry
 
 
+def _simulate_price_impact(raw_book: dict, size_usd: float) -> tuple[float, float]:
+    """Walk the order book to calculate the volume-weighted average fill price.
+
+    Parameters
+    ----------
+    raw_book:
+        JSONB snapshot from OrderBookSnapshot — ``{"asks": [{"price": p, "size": s}, ...]}``.
+        ``size`` is in shares (contracts), not USD.
+    size_usd:
+        Order size in USD we want to fill.
+    side:
+        ``'yes'`` or ``'no'`` — determines which levels to consume.
+
+    Returns
+    -------
+    (vwap, price_impact_pct)
+        vwap: volume-weighted average price paid.
+        price_impact_pct: % premium over best_ask (0.0 if no impact data).
+    """
+    levels = raw_book.get("asks", [])
+    if not levels:
+        return 0.0, 0.0
+
+    # Sort ascending by price (best ask first)
+    levels = sorted(levels, key=lambda x: x["price"])
+    best_ask = levels[0]["price"]
+
+    remaining_usd = size_usd
+    total_shares = 0.0
+    total_cost = 0.0
+
+    for level in levels:
+        price = level["price"]
+        level_shares = level["size"]
+        level_usd = level_shares * price
+
+        if remaining_usd <= 0:
+            break
+
+        consumed_usd = min(remaining_usd, level_usd)
+        consumed_shares = consumed_usd / price
+
+        total_shares += consumed_shares
+        total_cost += consumed_usd
+        remaining_usd -= consumed_usd
+
+    if total_shares <= 0 or total_cost <= 0:
+        return best_ask, 0.0
+
+    vwap = total_cost / total_shares
+    price_impact_pct = ((vwap - best_ask) / best_ask * 100) if best_ask > 0 else 0.0
+
+    return round(vwap, 6), round(price_impact_pct, 4)
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -285,9 +340,14 @@ class OrderManager:
             )
             return False
 
-        # Fill at best_ask (realistic slippage simulation)
-        # In live, you pay the ask — not your limit price target
-        fill_price = best_ask
+        # Simulate price impact by walking the order book levels
+        raw_book = snapshot.raw_book or {}
+        fill_price, price_impact_pct = _simulate_price_impact(raw_book, order.size_usd)
+        if fill_price <= 0:
+            # Fallback to best_ask if raw_book is empty
+            fill_price = best_ask
+            price_impact_pct = 0.0
+
         fill_size_usd = order.size_usd
         fill_at = _utcnow()
 
@@ -323,13 +383,14 @@ class OrderManager:
             shares=shares,
             status="open",
             opened_at=fill_at,
+            price_impact_pct=price_impact_pct if price_impact_pct > 0 else None,
         )
         db.add(position)
 
         logger.info(
-            "PaperOrder FILLED: id=%d market_id=%d %s %s@%.4f (ask=%.4f) $%.2f",
+            "PaperOrder FILLED: id=%d market_id=%d %s %s@%.4f (ask=%.4f) impact=%.2f%% $%.2f",
             order.id, order.market_id, order.strategy,
-            order.side, fill_price, best_ask, fill_size_usd,
+            order.side, fill_price, best_ask, price_impact_pct, fill_size_usd,
         )
         return True
 

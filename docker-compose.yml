@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   postgres:
@@ -11,36 +11,63 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prophet_user -d prophet_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    stop_grace_period: 60s
+    shm_size: "256mb"
+    command: >
+      postgres
+      -c wal_level=replica
+      -c checkpoint_timeout=5min
+      -c max_wal_size=256MB
+      -c min_wal_size=80MB
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
 
   engine:
     build:
-      context: ./engine
+      context: ./src/engine
       dockerfile: Dockerfile
-    environment:
-      # Credenciales de BD (debe coincidir con la config de arriba)
-      - DATABASE_URL=postgresql+asyncpg://prophet_user:prophet_password@postgres:5432/prophet_db
-      - REDIS_URL=redis://redis:6379/0
-      - API_SECRET=cambiame_por_un_secreto_seguro
-      - POLYMARKET_HOST=https://clob.polymarket.com
-      - POLYMARKET_CHAIN_ID=137
-      - POLYMARKET_PROXY_ADDRESS=0x4b70d04124c2996De29e0caa050A49822Faec6Cc
-      # Activar API (ej: KEY, SECRET, PASSPHRASE de Polymarket)
-      # - POLYMARKET_API_KEY=
-      # - POLYMARKET_API_SECRET=
-      # - POLYMARKET_API_PASSPHRASE=
+    env_file:
+      - ./src/engine/.env
     ports:
       - "8000:8000"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
 volumes:
   postgres_data:

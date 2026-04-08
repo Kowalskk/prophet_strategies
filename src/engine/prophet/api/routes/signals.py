@@ -21,7 +21,7 @@ router = APIRouter(prefix="/signals", tags=["signals"])
 
 
 class SignalMarket(BaseModel):
-    crypto: str
+    crypto: str | None
     threshold: float | None
     direction: str | None
     resolution_date: str | None

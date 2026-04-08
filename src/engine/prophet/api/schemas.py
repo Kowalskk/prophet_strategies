@@ -183,6 +183,7 @@ class PositionResponse(BaseModel):
     gross_pnl: float | None
     fees: float | None
     net_pnl: float | None
+    price_impact_pct: float | None = None
     # Live P&L estimate (only for open positions)
     unrealized_pnl: float | None = None
     current_price: float | None = None

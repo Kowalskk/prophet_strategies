@@ -89,15 +89,25 @@ async def _get_current_price(db: AsyncSession, market_id: int, side: str) -> flo
 
 @router.get("", response_model=PositionListResponse)
 async def list_open_positions(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ) -> PositionListResponse:
-    """Return all open positions with live unrealized P&L estimates."""
+    """Return open positions with live unrealized P&L estimates (paginated)."""
     from prophet.db.models import Market, OrderBookSnapshot, Position
+
+    total = (
+        await db.execute(
+            select(func.count()).select_from(Position).where(Position.status == "open")
+        )
+    ).scalar_one() or 0
 
     stmt = (
         select(Position)
         .where(Position.status == "open")
         .order_by(Position.opened_at.desc())
+        .limit(limit)
+        .offset(offset)
     )
     result = await db.execute(stmt)
     positions = list(result.scalars().all())
@@ -125,7 +135,6 @@ async def list_open_positions(
     token_ids = list(token_to_key.keys())
 
     # Single query: latest snapshot per token_id using ROW_NUMBER
-    from sqlalchemy import func, over
     from sqlalchemy.orm import aliased
 
     if token_ids:
@@ -159,30 +168,28 @@ async def list_open_positions(
         current_price = price_map.get((pos.market_id, pos.side.upper()))
         items.append(_position_to_response(pos, current_price))
 
-    return PositionListResponse(items=items, total=len(items))
+    return PositionListResponse(items=items, total=total)
 
 
 @router.get("/closed", response_model=ClosedPositionResponse)
 async def list_closed_positions(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    strategy: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> ClosedPositionResponse:
-    """Return closed positions with pagination."""
+    """Return closed positions with pagination, optionally filtered by strategy."""
     from prophet.db.models import Position
 
-    count_stmt = (
-        select(func.count()).select_from(Position).where(Position.status == "closed")
-    )
+    count_stmt = select(func.count()).select_from(Position).where(Position.status == "closed")
+    if strategy:
+        count_stmt = count_stmt.where(Position.strategy == strategy)
     total = (await db.execute(count_stmt)).scalar_one() or 0
 
-    stmt = (
-        select(Position)
-        .where(Position.status == "closed")
-        .order_by(Position.closed_at.desc())
-        .limit(limit)
-        .offset(offset)
-    )
+    stmt = select(Position).where(Position.status == "closed")
+    if strategy:
+        stmt = stmt.where(Position.strategy == strategy)
+    stmt = stmt.order_by(Position.closed_at.desc()).limit(limit).offset(offset)
     result = await db.execute(stmt)
     positions = result.scalars().all()
 

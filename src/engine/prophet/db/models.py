@@ -469,6 +469,10 @@ class Position(Base):
         Float, nullable=True,
         comment="gross_pnl - fees.",
     )
+    price_impact_pct: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+        comment="Price impact at fill: % premium paid over best_ask due to consuming OB depth. NULL for pre-impact trades.",
+    )
 
     # Relationships
     market: Mapped[Market] = relationship("Market", back_populates="positions")

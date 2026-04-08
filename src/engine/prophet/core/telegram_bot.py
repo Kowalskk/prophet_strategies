@@ -526,40 +526,74 @@ class TelegramNotifier:
             )
             return
 
+        from collections import defaultdict
+        import calendar
+
         now = datetime.now(timezone.utc)
-        lines = []
+        today = now.date()
+
+        # Buckets: expired, today, this_week (next 6 days), by_month (month label → aggregate)
+        expired = []
+        day_rows = []   # (res_date, markets, positions, capital, secs)
+        month_buckets: dict[str, dict] = defaultdict(lambda: {"mkts": 0, "pos": 0, "cap": 0.0, "days": 9999})
 
         for res_date, markets, positions, capital in rows:
             target = datetime(res_date.year, res_date.month, res_date.day,
                               23, 59, 59, tzinfo=timezone.utc)
             secs = int((target - now).total_seconds())
-            days = secs // 86400
-            hours = (secs % 86400) // 3600
-            mins = (secs % 3600) // 60
+            days = max(secs // 86400, 0)
 
             if secs < 0:
-                countdown = "EXPIRADO ⚠️"
-                tag = ""
-            elif days == 0:
-                countdown = f"HOY — {hours:02d}h {mins:02d}m"
-                tag = " 🔥"
-            elif days <= 3:
-                countdown = f"{days}d {hours:02d}h"
-                tag = " ⏳"
+                expired.append((res_date, markets, positions, float(capital)))
+            elif days <= 6:
+                day_rows.append((res_date, markets, positions, float(capital), secs))
             else:
-                countdown = f"{days}d"
-                tag = ""
+                # Group by "Mon YYYY" or just "Mon" if same year
+                label = res_date.strftime("%b %Y") if res_date.year != today.year else res_date.strftime("%b %Y")
+                month_buckets[label]["mkts"] += markets
+                month_buckets[label]["pos"] += positions
+                month_buckets[label]["cap"] += float(capital)
+                month_buckets[label]["days"] = min(month_buckets[label]["days"], days)
 
-            lines.append(
-                f"<b>{res_date}{tag}</b> — {countdown}\n"
-                f"  {markets} mkt | {positions} pos | ${float(capital):,.0f}"
-            )
+        lines = []
+
+        # Expired
+        if expired:
+            tot_m = sum(r[1] for r in expired)
+            tot_p = sum(r[2] for r in expired)
+            tot_c = sum(r[3] for r in expired)
+            lines.append(f"⚠️ <b>EXPIRADO</b> — {tot_m} mkt | {tot_p} pos | ${tot_c:,.0f}")
+
+        # Day-by-day for next 7 days
+        week_total_pos = 0
+        week_total_cap = 0.0
+        for res_date, markets, positions, capital, secs in day_rows:
+            hours = (secs % 86400) // 3600
+            mins = (secs % 3600) // 60
+            if secs // 86400 == 0:
+                label = f"🔥 <b>HOY {res_date.strftime('%b %d')}</b> — {hours:02d}h {mins:02d}m"
+            else:
+                d = secs // 86400
+                label = f"⏳ <b>{res_date.strftime('%b %d')}</b> — {d}d {hours:02d}h"
+            lines.append(f"{label}\n   {markets} mkt | {positions} pos | ${capital:,.0f}")
+            week_total_pos += positions
+            week_total_cap += capital
+
+        # This-week summary line
+        if day_rows:
+            lines.append(f"<b>→ Esta semana: {week_total_pos:,} pos | ${week_total_cap:,.0f}</b>")
+
+        # Monthly buckets
+        if month_buckets:
+            lines.append("")
+            for label, b in month_buckets.items():
+                lines.append(f"📅 <b>{label}</b> — {b['days']}d+\n   {b['mkts']} mkt | {b['pos']:,} pos | ${b['cap']:,.0f}")
 
         total_pos = sum(r[2] for r in rows)
         total_cap = sum(float(r[3]) for r in rows)
 
         await self._send(
-            "<b>⏱ Market Countdown</b>\n"
+            "<b>⏱ Resoluciones</b>\n"
             "━━━━━━━━━━━━━━━━━━\n" +
             "\n".join(lines) +
             f"\n━━━━━━━━━━━━━━━━━━\n"
